@@ -24,10 +24,13 @@ import { DRILL_CATEGORIES } from "./data/categories";
 import TacticsBoard, { BoardSvg } from "./components/TacticsBoard";
 import { ARROW_LEGEND, wavyPath } from "./components/boardData";
 
-const NAVY = "#0F2A44";
-const NAVY_DARK = "#0B1F33";
-const GOLD = "#C9A227";
-const GOLD_LIGHT = "#E7C65C";
+// Classic Brophy (Option A, §11) — same palette as the main TeamHub app.
+// Primary red #980000 sampled from brophyprep.org's header; accent #A6192E is
+// the site's own --brophy-red variable. RED_LIGHT is a pale red tint DERIVED
+// from #980000 (not from the site), for eyebrow text on the red header.
+const RED = "#980000";
+const ACCENT = "#A6192E";
+const RED_LIGHT = "#F5C6C6";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 const lines = (t) => (t || "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -61,10 +64,10 @@ function LegendChips() {
         <span key={a.id} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
           <svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true">
             {a.id === "dribble"
-              ? <path d={wavyPath(1, 5, 25, 5, 2.5, 8)} fill="none" stroke={GOLD} strokeWidth={1.8} />
+              ? <path d={wavyPath(1, 5, 25, 5, 2.5, 8)} fill="none" stroke={ACCENT} strokeWidth={1.8} />
               : a.id === "shot"
-                ? <g><line x1="1" y1="3" x2="25" y2="3" stroke={GOLD} strokeWidth={1.4} /><line x1="1" y1="7" x2="25" y2="7" stroke={GOLD} strokeWidth={1.4} /></g>
-                : <line x1="1" y1="5" x2="25" y2="5" stroke={GOLD} strokeWidth={2} strokeDasharray={a.id === "run" ? "4 3" : undefined} />}
+                ? <g><line x1="1" y1="3" x2="25" y2="3" stroke={ACCENT} strokeWidth={1.4} /><line x1="1" y1="7" x2="25" y2="7" stroke={ACCENT} strokeWidth={1.4} /></g>
+                : <line x1="1" y1="5" x2="25" y2="5" stroke={ACCENT} strokeWidth={2} strokeDasharray={a.id === "run" ? "4 3" : undefined} />}
           </svg>
           {a.label}
         </span>
@@ -84,7 +87,7 @@ function DrillCard({ drill, onOpen }) {
   return (
     <button
       onClick={onOpen}
-      className="text-left bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:border-slate-300 transition-shadow focus:outline-none focus:ring-2 focus:ring-[#C9A227]"
+      className="text-left bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:border-slate-300 transition-shadow focus:outline-none focus:ring-2 focus:ring-[#A6192E]"
     >
       <div className="aspect-[4/3] bg-white border-b border-slate-100 overflow-hidden flex items-center justify-center">
         {drill.diagramData
@@ -97,10 +100,10 @@ function DrillCard({ drill, onOpen }) {
           )}
       </div>
       <div className="p-4">
-        <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: NAVY }}>
+        <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>
           {drill.cat}
         </span>
-        <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: NAVY }}>{drill.name}</h3>
+        <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: RED }}>{drill.name}</h3>
         {drill.desc ? <p className="mt-1 text-sm text-slate-500 line-clamp-2">{drill.desc}</p> : null}
         <div className="mt-3 flex items-center gap-3 text-xs font-semibold text-slate-500 flex-wrap">
           {s.lengthYd && s.widthYd ? <span>{s.lengthYd} × {s.widthYd} yd</span> : null}
@@ -135,10 +138,10 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
 
       <div className="mt-2 flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: NAVY }}>
+          <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>
             {drill.cat}
           </span>
-          <h1 className="mt-2 text-2xl sm:text-3xl font-black leading-tight" style={{ color: NAVY }}>{drill.name}</h1>
+          <h1 className="mt-2 text-2xl sm:text-3xl font-black leading-tight" style={{ color: RED }}>{drill.name}</h1>
           {drill.desc ? <p className="mt-2 text-slate-600 leading-relaxed">{drill.desc}</p> : null}
         </div>
         {isCoach && (
@@ -197,7 +200,7 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
           <ol className="mt-2 space-y-2">
             {lines(drill.howTo).map((step, i) => (
               <li key={i} className="flex gap-3 bg-white rounded-xl border border-slate-200 px-4 py-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full text-white text-xs font-black flex items-center justify-center" style={{ backgroundColor: NAVY }}>{i + 1}</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-white text-xs font-black flex items-center justify-center" style={{ backgroundColor: RED }}>{i + 1}</span>
                 <span className="text-sm text-slate-700 leading-relaxed">{step}</span>
               </li>
             ))}
@@ -211,7 +214,7 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
           <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Look for</h2>
           <ul className="mt-2 space-y-1.5">
             {drill.objectives.map((o, i) => (
-              <li key={i} className="flex gap-2 text-sm text-slate-700"><Check className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: GOLD }} />{o}</li>
+              <li key={i} className="flex gap-2 text-sm text-slate-700"><Check className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: ACCENT }} />{o}</li>
             ))}
           </ul>
         </section>
@@ -324,7 +327,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
     }
   };
 
-  const inputCls = "w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C9A227] focus:border-[#C9A227]";
+  const inputCls = "w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#A6192E] focus:border-[#A6192E]";
   const labelCls = "block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1";
 
   return (
@@ -332,7 +335,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
       <button onClick={onCancel} className="mt-4 flex items-center gap-1 text-sm font-bold text-slate-600 hover:text-slate-900 min-h-11">
         <ChevronLeft className="w-4 h-4" /> Cancel
       </button>
-      <h1 className="mt-2 text-2xl font-black" style={{ color: NAVY }}>{isEdit ? "Edit drill" : "Add a drill"}</h1>
+      <h1 className="mt-2 text-2xl font-black" style={{ color: RED }}>{isEdit ? "Edit drill" : "Add a drill"}</h1>
       <p className="mt-1 text-sm text-slate-500">Only coaches can add drills. Build the diagram on the board, then fill in the setup — the board and the setup stay in sync.</p>
 
       <div className="mt-5 space-y-4 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
@@ -372,7 +375,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
               </button>
             </div>
           ) : null}
-          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: NAVY }}>
+          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: RED }}>
             <Layers className="w-4 h-4" /> {form.diagramData ? "Edit board" : "Build on the board"}
           </button>
           <p className="mt-1.5 text-xs text-slate-400">Place players, cones, goals and arrows on a to-scale pitch. Saving the board fills in the grid size below.</p>
@@ -425,7 +428,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
 
         <div className="flex gap-2 pt-1">
           <button onClick={onCancel} className="flex-1 py-3 rounded-full text-sm font-bold bg-slate-100 text-slate-700 min-h-12">Cancel</button>
-          <button onClick={save} disabled={saving} className="flex-1 py-3 rounded-full text-sm font-bold text-white min-h-12 disabled:opacity-50" style={{ backgroundColor: NAVY }}>
+          <button onClick={save} disabled={saving} className="flex-1 py-3 rounded-full text-sm font-bold text-white min-h-12 disabled:opacity-50" style={{ backgroundColor: RED }}>
             {saving ? "Saving…" : isEdit ? "Save changes" : "Add drill"}
           </button>
         </div>
@@ -468,18 +471,18 @@ function SignInModal({ onClose }) {
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-black" style={{ color: NAVY }}>Coach sign in</h2>
+          <h2 className="text-lg font-black" style={{ color: RED }}>Coach sign in</h2>
           <button onClick={onClose} aria-label="Close" className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center"><X className="w-4 h-4 text-slate-600" /></button>
         </div>
         <p className="mt-1 text-sm text-slate-500">Sign in with your Brophy account. Only coaches can add or edit drills — players just browse.</p>
-        <button onClick={google} disabled={busy} className="mt-4 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12 disabled:opacity-50" style={{ backgroundColor: NAVY }}>
+        <button onClick={google} disabled={busy} className="mt-4 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12 disabled:opacity-50" style={{ backgroundColor: RED }}>
           <LogIn className="w-4 h-4" /> Continue with Google
         </button>
         <div className="my-4 flex items-center gap-3 text-xs font-bold text-slate-400">
           <span className="flex-1 h-px bg-slate-200" /> or email <span className="flex-1 h-px bg-slate-200" />
         </div>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="Email" className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-[#C9A227]" />
-        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" placeholder="Password" onKeyDown={(e) => { if (e.key === "Enter") emailSignIn(); }} className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#C9A227]" />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder="Email" className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-[#A6192E]" />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" placeholder="Password" onKeyDown={(e) => { if (e.key === "Enter") emailSignIn(); }} className="w-full border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#A6192E]" />
         <button onClick={emailSignIn} disabled={busy} className="mt-3 w-full py-3 rounded-full text-sm font-bold bg-slate-100 text-slate-700 min-h-12 disabled:opacity-50">Sign in</button>
         {error ? <p className="mt-3 text-sm font-semibold text-red-600">{error}</p> : null}
       </div>
@@ -573,18 +576,18 @@ export default function App() {
   return (
     <div className="min-h-screen" style={{ backgroundColor: "#F4F6F8" }}>
       {/* header */}
-      <header style={{ backgroundColor: NAVY }} className="text-white">
+      <header style={{ backgroundColor: RED }} className="text-white">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: GOLD }}>
-            <BookOpen className="w-6 h-6" style={{ color: NAVY }} />
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: "#FFFFFF" }}>
+            <BookOpen className="w-6 h-6" style={{ color: RED }} />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: GOLD_LIGHT }}>Brophy College Prep</div>
+            <div className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: RED_LIGHT }}>Brophy College Prep</div>
             <h1 className="text-xl sm:text-2xl font-black leading-tight">Drill Library</h1>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {isCoach && (
-              <button onClick={() => openForm(null)} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full min-h-11 text-white" style={{ backgroundColor: GOLD, color: NAVY }}>
+              <button onClick={() => openForm(null)} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full min-h-11 text-white" style={{ backgroundColor: "#FFFFFF", color: RED }}>
                 <Plus className="w-4 h-4" /> <span className="hidden sm:inline">Add drill</span><span className="sm:hidden">Add</span>
               </button>
             )}
@@ -632,7 +635,7 @@ export default function App() {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search drills — name, keyword, tag…"
                 aria-label="Search drills"
-                className="w-full bg-white border border-slate-200 rounded-full pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#C9A227] shadow-sm"
+                className="w-full bg-white border border-slate-200 rounded-full pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#A6192E] shadow-sm"
               />
             </div>
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap">
@@ -641,7 +644,7 @@ export default function App() {
                   key={c}
                   onClick={() => setCat(c)}
                   className={`flex-shrink-0 text-xs font-bold px-3 py-2 rounded-full min-h-9 border ${cat === c ? "text-white border-transparent" : "bg-white text-slate-600 border-slate-200"}`}
-                  style={cat === c ? { backgroundColor: NAVY } : {}}
+                  style={cat === c ? { backgroundColor: RED } : {}}
                 >
                   {c}{counts[c] ? ` · ${counts[c]}` : ""}
                 </button>
@@ -659,7 +662,7 @@ export default function App() {
               <div className="w-14 h-14 mx-auto rounded-2xl flex items-center justify-center" style={{ backgroundColor: "#EEF1F5" }}>
                 <BookOpen className="w-7 h-7 text-slate-400" />
               </div>
-              <h2 className="mt-4 text-lg font-black" style={{ color: NAVY }}>
+              <h2 className="mt-4 text-lg font-black" style={{ color: RED }}>
                 {drills.length === 0 ? "The library is empty — for now" : "No drills match that search"}
               </h2>
               <p className="mt-1 text-sm text-slate-500 max-w-md mx-auto">
@@ -668,7 +671,7 @@ export default function App() {
                   : "Try a different keyword or category."}
               </p>
               {drills.length === 0 && isCoach && (
-                <button onClick={() => openForm(null)} className="mt-5 inline-flex items-center gap-2 text-sm font-bold px-5 py-3 rounded-full text-white min-h-12" style={{ backgroundColor: NAVY }}>
+                <button onClick={() => openForm(null)} className="mt-5 inline-flex items-center gap-2 text-sm font-bold px-5 py-3 rounded-full text-white min-h-12" style={{ backgroundColor: RED }}>
                   <Plus className="w-4 h-4" /> Add the first drill
                 </button>
               )}
@@ -704,7 +707,7 @@ export default function App() {
       {view.name === "detail" && !selected && (
         <div className="max-w-3xl mx-auto px-4 py-16 text-center">
           <p className="text-slate-500 font-semibold">That drill isn&apos;t here anymore.</p>
-          <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: NAVY }}>Back to the library</button>
+          <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Back to the library</button>
         </div>
       )}
 
@@ -719,7 +722,7 @@ export default function App() {
       {view.name === "form" && !isCoach && (
         <div className="max-w-3xl mx-auto px-4 py-16 text-center">
           <p className="text-slate-500 font-semibold">Only coaches can add or edit drills.</p>
-          <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: NAVY }}>Back to the library</button>
+          <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Back to the library</button>
         </div>
       )}
 

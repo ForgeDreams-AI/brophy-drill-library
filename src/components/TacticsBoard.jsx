@@ -26,7 +26,7 @@ const R = 19;          // player token radius (board units)
 const HIT_R = 30;      // invisible touch-hit radius around tokens
 const rid = () => Math.random().toString(36).slice(2, 9);
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
-const ARROW_GOLD = "#FFC845";
+const ARROW_WHITE = "#FFFFFF"; // white arrows on the green pitch
 
 // White line style shared by all field markings.
 const L = { fill: "none", stroke: "rgba(255,255,255,0.85)", strokeWidth: 3 };
@@ -135,10 +135,10 @@ export function BoardSvg({ state, className = "", showLegend = false }) {
     <svg viewBox={`0 0 ${VB_W} ${showLegend ? vbH : pitchH}`} className={className} role="img" aria-label="Drill diagram">
       <defs>
         <marker id="bs-head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_GOLD} />
+          <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_WHITE} />
         </marker>
         <marker id="bs-open" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-          <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_GOLD} strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_WHITE} strokeWidth="1.8" strokeLinecap="round" />
         </marker>
       </defs>
       <PitchMarks preset={preset} wYd={wYd} dYd={dYd} pitchH={pitchH} />
@@ -149,18 +149,18 @@ export function BoardSvg({ state, className = "", showLegend = false }) {
       ))}
       {s.arrows.map((a) => {
         const p = { x1: px(a.from.x), y1: py(a.from.y), x2: px(a.to.x), y2: py(a.to.y) };
-        if (a.kind === "dribble") return <path key={a.id} d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_GOLD} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#bs-head)" />;
+        if (a.kind === "dribble") return <path key={a.id} d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#bs-head)" />;
         if (a.kind === "shot") {
           const dx = p.x2 - p.x1, dy = p.y2 - p.y1, len = Math.hypot(dx, dy) || 1, ox = (-dy / len) * 4, oy = (dx / len) * 4;
           return (
             <g key={a.id}>
-              <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_GOLD} strokeWidth={2.5} strokeLinecap="round" />
-              <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_GOLD} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#bs-head)" />
+              <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" />
+              <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#bs-head)" />
             </g>
           );
         }
         return (
-          <line key={a.id} {...p} stroke={ARROW_GOLD} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
+          <line key={a.id} {...p} stroke={ARROW_WHITE} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
             strokeDasharray={a.kind === "run" ? "10 7" : undefined}
             markerEnd={a.kind === "pass" ? "url(#bs-open)" : "url(#bs-head)"} />
         );
@@ -212,10 +212,10 @@ function LegendStrip({ y }) {
         const cx = colW * i + colW / 2;
         const x1 = cx - 42, x2 = cx + 42, cy = y + 30;
         const sample = it.kind === "dribble"
-          ? <path d={wavyPath(x1, cy, x2, cy, 5, 14)} fill="none" stroke={ARROW_GOLD} strokeWidth={3} strokeLinecap="round" markerEnd="url(#bs-head)" />
+          ? <path d={wavyPath(x1, cy, x2, cy, 5, 14)} fill="none" stroke={ARROW_WHITE} strokeWidth={3} strokeLinecap="round" markerEnd="url(#bs-head)" />
           : it.kind === "shot"
-            ? <g><line x1={x1} y1={cy - 4} x2={x2} y2={cy - 4} stroke={ARROW_GOLD} strokeWidth={2} /><line x1={x1} y1={cy + 4} x2={x2} y2={cy + 4} stroke={ARROW_GOLD} strokeWidth={2} markerEnd="url(#bs-head)" /></g>
-            : <line x1={x1} y1={cy} x2={x2} y2={cy} stroke={ARROW_GOLD} strokeWidth={3.5} strokeLinecap="round" strokeDasharray={it.kind === "run" ? "9 6" : undefined} markerEnd={it.kind === "pass" ? "url(#bs-open)" : "url(#bs-head)"} />;
+            ? <g><line x1={x1} y1={cy - 4} x2={x2} y2={cy - 4} stroke={ARROW_WHITE} strokeWidth={2} /><line x1={x1} y1={cy + 4} x2={x2} y2={cy + 4} stroke={ARROW_WHITE} strokeWidth={2} markerEnd="url(#bs-head)" /></g>
+            : <line x1={x1} y1={cy} x2={x2} y2={cy} stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" strokeDasharray={it.kind === "run" ? "9 6" : undefined} markerEnd={it.kind === "pass" ? "url(#bs-open)" : "url(#bs-head)"} />;
         return (
           <g key={it.kind}>
             {sample}
@@ -492,18 +492,18 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
           >
             <defs>
               <marker id="tb-head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_GOLD} />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_WHITE} />
               </marker>
               <marker id="tb-open" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_GOLD} strokeWidth="1.8" strokeLinecap="round" />
+                <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_WHITE} strokeWidth="1.8" strokeLinecap="round" />
               </marker>
               {/* bs-* ids are what LegendStrip uses (same shapes, so the strip
                   exports with the PNG from either SVG). */}
               <marker id="bs-head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
-                <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_GOLD} />
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={ARROW_WHITE} />
               </marker>
               <marker id="bs-open" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-                <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_GOLD} strokeWidth="1.8" strokeLinecap="round" />
+                <path d="M 0.5 0.5 L 9 5 L 0.5 9.5" fill="none" stroke={ARROW_WHITE} strokeWidth="1.8" strokeLinecap="round" />
               </marker>
             </defs>
             <g data-pitch="1"><PitchMarks preset={dims.preset} wYd={dims.wYd} dYd={dims.dYd} pitchH={pitchH} /></g>
@@ -529,7 +529,7 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
                 return (
                   <g key={a.id}>
                     {halo && <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" {...halo} strokeLinecap="round" />}
-                    <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_GOLD} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#tb-head)" onPointerDown={onDown} style={{ cursor: "pointer" }} />
+                    <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#tb-head)" onPointerDown={onDown} style={{ cursor: "pointer" }} />
                   </g>
                 );
               }
@@ -537,15 +537,15 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
                 const dx = p.x2 - p.x1, dy = p.y2 - p.y1, len = Math.hypot(dx, dy) || 1, ox = (-dy / len) * 4, oy = (dx / len) * 4;
                 return (
                   <g key={a.id} onPointerDown={onDown} style={{ cursor: "pointer" }}>
-                    <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_GOLD} strokeWidth={2.5} strokeLinecap="round" />
-                    <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_GOLD} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#tb-head)" />
+                    <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" />
+                    <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#tb-head)" />
                   </g>
                 );
               }
               return (
                 <g key={a.id}>
                   {halo && <line {...p} {...halo} strokeLinecap="round" />}
-                  <line {...p} stroke={ARROW_GOLD} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
+                  <line {...p} stroke={ARROW_WHITE} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
                     strokeDasharray={a.kind === "run" ? "10 7" : undefined}
                     markerEnd={a.kind === "pass" ? "url(#tb-open)" : "url(#tb-head)"} onPointerDown={onDown} style={{ cursor: "pointer" }} />
                 </g>
@@ -554,8 +554,8 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
             {draft && (drawKind === "zone"
               ? <rect data-skip x={px(Math.min(draft.from.x, draft.to.x))} y={py(Math.min(draft.from.y, draft.to.y))} width={Math.abs(draft.to.x - draft.from.x) * (VB_W - 2 * M)} height={Math.abs(draft.to.y - draft.from.y) * (pitchH - 2 * M)} fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.7)" strokeWidth={2.5} strokeDasharray="8 6" rx={6} />
               : drawKind === "dribble"
-                ? <path data-skip d={wavyPath(draft.from.x * (VB_W - 2 * M) + M, draft.from.y * (pitchH - 2 * M) + M, draft.to.x * (VB_W - 2 * M) + M, draft.to.y * (pitchH - 2 * M) + M)} fill="none" stroke={ARROW_GOLD} strokeWidth={4} strokeLinecap="round" markerEnd="url(#tb-head)" />
-                : <line data-skip x1={px(draft.from.x)} y1={py(draft.from.y)} x2={px(draft.to.x)} y2={py(draft.to.y)} stroke={ARROW_GOLD} strokeWidth={4} strokeLinecap="round" strokeDasharray={drawKind === "run" ? "10 7" : undefined} markerEnd={drawKind === "pass" ? "url(#tb-open)" : "url(#tb-head)"} />)}
+                ? <path data-skip d={wavyPath(draft.from.x * (VB_W - 2 * M) + M, draft.from.y * (pitchH - 2 * M) + M, draft.to.x * (VB_W - 2 * M) + M, draft.to.y * (pitchH - 2 * M) + M)} fill="none" stroke={ARROW_WHITE} strokeWidth={4} strokeLinecap="round" markerEnd="url(#tb-head)" />
+                : <line data-skip x1={px(draft.from.x)} y1={py(draft.from.y)} x2={px(draft.to.x)} y2={py(draft.to.y)} stroke={ARROW_WHITE} strokeWidth={4} strokeLinecap="round" strokeDasharray={drawKind === "run" ? "10 7" : undefined} markerEnd={drawKind === "pass" ? "url(#tb-open)" : "url(#tb-head)"} />)}
 
             {/* tokens */}
             {tokens.map((t) => {
@@ -675,10 +675,10 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
               <span key={a.id} className="flex items-center gap-1.5 text-[10px] font-semibold text-white/60">
                 <svg width="26" height="10" viewBox="0 0 26 10" aria-hidden="true">
                   {a.id === "dribble"
-                    ? <path d={wavyPath(1, 5, 25, 5, 2.5, 8)} fill="none" stroke={ARROW_GOLD} strokeWidth={1.8} />
+                    ? <path d={wavyPath(1, 5, 25, 5, 2.5, 8)} fill="none" stroke={ARROW_WHITE} strokeWidth={1.8} />
                     : a.id === "shot"
-                      ? <g><line x1="1" y1="3" x2="25" y2="3" stroke={ARROW_GOLD} strokeWidth={1.4} /><line x1="1" y1="7" x2="25" y2="7" stroke={ARROW_GOLD} strokeWidth={1.4} /></g>
-                      : <line x1="1" y1="5" x2="25" y2="5" stroke={ARROW_GOLD} strokeWidth={2} strokeDasharray={a.id === "run" ? "4 3" : undefined} markerEnd={a.id === "pass" ? "url(#tb-open)" : undefined} />}
+                      ? <g><line x1="1" y1="3" x2="25" y2="3" stroke={ARROW_WHITE} strokeWidth={1.4} /><line x1="1" y1="7" x2="25" y2="7" stroke={ARROW_WHITE} strokeWidth={1.4} /></g>
+                      : <line x1="1" y1="5" x2="25" y2="5" stroke={ARROW_WHITE} strokeWidth={2} strokeDasharray={a.id === "run" ? "4 3" : undefined} markerEnd={a.id === "pass" ? "url(#tb-open)" : undefined} />}
                 </svg>
                 {a.label}
               </span>
