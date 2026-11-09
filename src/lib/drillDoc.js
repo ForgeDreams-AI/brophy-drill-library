@@ -31,6 +31,10 @@
 //   photos?: string[] — image URLs (team app uploads)
 //   diagram?: string | null — raster PNG of the board (team app upload)
 //   diagramData?: object | null — structured board JSON, the editable diagram
+//     ({ field, lengthYd, widthYd, tokens, arrows, zones } — see
+//     boardData.normalizeBoardState). May carry an optional `animation` field
+//     ({ steps: [{ id, tokenId, path, durMs, receiverId? }] }) — a recorded
+//     "Play the drill" animation; absent = a static diagram.
 //   diagramImage?: string | null — setup still from the Soccer Video Library;
 //     WINS over diagramData and diagram when set (photo-first rule)
 //   scenario?: string

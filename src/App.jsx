@@ -32,7 +32,7 @@ import {
 import { auth, db } from "./firebase";
 import { DRILL_CATEGORIES } from "./data/categories";
 import { normalizeDrillDoc, drillDocToForm, formToDrillPayload, DRILL_KIND } from "./lib/drillDoc";
-import TacticsBoard, { BoardSvg } from "./components/TacticsBoard";
+import TacticsBoard, { BoardSvg, BoardPlayer } from "./components/TacticsBoard";
 import DrillPrintSheet from "./components/DrillPrintSheet";
 import { ARROW_LEGEND, wavyPath } from "./components/boardData";
 
@@ -122,6 +122,7 @@ export function DrillCard({ drill, onOpen }) {
           {drill.dur ? <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{drill.dur} min</span> : null}
           {drill.players ? <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{drill.players}</span> : null}
           {drill.videoUrl ? <span className="flex items-center gap-1"><Play className="w-3.5 h-3.5" />Video</span> : null}
+          {drill.diagramData?.animation?.steps?.length ? <span className="flex items-center gap-1 text-sky-600"><Play className="w-3.5 h-3.5 fill-sky-600" />Animated</span> : null}
         </div>
       </div>
     </button>
@@ -131,9 +132,10 @@ export function DrillCard({ drill, onOpen }) {
 // ── drill detail ───────────────────────────────────────────────────────────
 // canEdit = coaches + drill builders (see canBuild in App). The Print button
 // is for everyone — printing is read-only.
-export function DrillDetail({ drill, canEdit, onBack, onEdit, onDuplicate, onDelete, onPrint }) {
+export function DrillDetail({ drill, canEdit, onBack, onEdit, onDuplicate, onDelete, onPrint, onPlay }) {
   const s = drill.setup || {};
   const embed = youTubeEmbed(drill.videoUrl);
+  const hasAnimation = Boolean(drill.diagramData?.animation?.steps?.length);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [imgOk, setImgOk] = useState(true);
   const setupItems = [
@@ -161,6 +163,11 @@ export function DrillDetail({ drill, canEdit, onBack, onEdit, onDuplicate, onDel
           {drill.desc ? <p className="mt-2 text-slate-600 leading-relaxed">{drill.desc}</p> : null}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+          {hasAnimation && (
+            <button onClick={onPlay} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>
+              <Play className="w-3.5 h-3.5 fill-white" /> Play animation
+            </button>
+          )}
           <button onClick={onPrint} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
             <Printer className="w-3.5 h-3.5" /> Print / Save PDF
           </button>
@@ -623,6 +630,7 @@ export default function App() {
   const [signInOpen, setSignInOpen] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [printDrill, setPrintDrill] = useState(null); // drill open in the print preview (DrillPrintSheet)
+  const [playDrill, setPlayDrill] = useState(null); // drill open in the animation player (BoardPlayer)
   const [incoming, setIncoming] = useState(() => parseIncoming());
   const [incomingStatus, setIncomingStatus] = useState(null); // saved | queued | already | error
   const [suggestions, setSuggestions] = useState([]);
@@ -974,6 +982,7 @@ export default function App() {
           onDuplicate={() => openForm({ ...selected, id: null, name: `${selected.name} (copy)` })}
           onDelete={() => handleDelete(selected.id)}
           onPrint={() => setPrintDrill(selected)}
+          onPlay={() => setPlayDrill(selected)}
         />
       )}
       {view.name === "detail" && !selected && (
@@ -1008,6 +1017,7 @@ export default function App() {
     </div>
 
     {printDrill && <DrillPrintSheet drill={printDrill} onClose={() => setPrintDrill(null)} />}
+    {playDrill && <BoardPlayer state={playDrill.diagramData} title={playDrill.title || playDrill.name} onClose={() => setPlayDrill(null)} />}
     </>
   );
 }

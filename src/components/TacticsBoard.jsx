@@ -21,19 +21,31 @@
 // an optional `rot` (equipment rotation). Old diagrams without those fields
 // load and render exactly as before.
 //
+// Animation ("Play the drill"): the state may carry an optional
+// `animation` field — an ordered list of steps, each moving one token along
+// one path (an existing arrow, bend included, or a free-drawn track). The
+// studio records steps (Animate mode), plays them back (Play/Pause/Restart,
+// scrubber, speed) and exports the playback as a video file (canvas +
+// MediaRecorder — the video is a download on demand; only the animation
+// DATA saves with the drill). BoardPlayer (same file) plays a saved
+// animation from a drill detail without opening the editor.
+//
 // onSave(pngBlob, state) — pngBlob is a rasterized image saved as the drill
 // diagram; state is the structured JSON above so the board is re-editable.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import {
   VB_W, LEG_H, clamp, BOARD_PRESETS, TEAM_COLORS, ARROW_LEGEND,
   ARROW_COLORS, TOKEN_HALF, wavyPath, arrowGeom, pitchSnapLines,
-  normalizeBoardState, boardDims,
+  normalizeBoardState, normalizeAnimation, boardDims,
 } from "./boardData";
 import {
   X, Trash2, RotateCcw, Undo2, Redo2, MousePointer2, Save,
   Copy, Magnet, Hand, SquareDashed, CircleDashed, ZoomIn, ZoomOut,
-  Maximize, LayoutGrid, Move, RotateCw,
+  Maximize, LayoutGrid, Move, RotateCw, Play, Pause, Video,
+  Clapperboard, ChevronUp, ChevronDown,
 } from "lucide-react";
 
 const M = 30;          // pitch inset margin
@@ -330,6 +342,390 @@ function LegendStrip({ y }) {
   );
 }
 
+// ─── animation ("Play the drill") ─────────────────────────────────────────
+// Pure helpers shared by the studio and the view-only player. Steps play
+// one after another, in list order; each step moves one token along its
+// path (an existing arrow's centreline, bend included, or a free-drawn
+// track). The path is lead-in from the token's current position (where its
+// previous steps left it), so a token never teleports. A step with a
+// receiver ends ON that token's position — that is how a pass ends at a
+// teammate. Times are wall-clock ms; positions are normalized 0..1.
+const ANIM_PX_PER_S = 220; // playback speed in viewBox px per second
+const ANIM_MIN_MS = 600, ANIM_MAX_MS = 4000;
+
+const polylineLenPx = (pts) => pts.reduce((s, p, i) => (i ? s + Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) : 0), 0);
+const pointAtLenPx = (pts, d) => {
+  let remaining = d;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (seg <= 0) continue;
+    if (remaining <= seg) {
+      const f = remaining / seg;
+      return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f };
+    }
+    remaining -= seg;
+  }
+  return pts[pts.length - 1];
+};
+const partialPolyline = (pts, d) => {
+  const out = [pts[0]];
+  let remaining = d;
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (seg <= 0) continue;
+    if (remaining <= seg) {
+      const f = remaining / seg;
+      out.push({ x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f });
+      return out;
+    }
+    remaining -= seg;
+    out.push(pts[i]);
+  }
+  return out;
+};
+// A step's path as pixel points in viewBox space.
+function stepPointsPx(step, state, px, py) {
+  if (!step) return [];
+  if (step.path?.kind === "arrow") {
+    const a = (state.arrows || []).find((x) => x.id === step.path.arrowId);
+    return a ? arrowGeom(a, px, py).pts : [];
+  }
+  if (step.path?.kind === "freehand" && Array.isArray(step.path.points)) {
+    return step.path.points.map((p) => ({ x: px(p.x), y: py(p.y) }));
+  }
+  return [];
+}
+function defaultStepDurMs(ptsPx) {
+  return Math.max(ANIM_MIN_MS, Math.min(ANIM_MAX_MS, Math.round((polylineLenPx(ptsPx) / ANIM_PX_PER_S) * 1000)));
+}
+function animationStepsOf(state) {
+  return normalizeBoardState(state).animation.steps;
+}
+function animationTotalMs(state) {
+  return animationStepsOf(state).reduce((s, st) => s + (st.durMs || 1200), 0);
+}
+// Token positions at time tMs, plus the in-progress path for the overlay
+// that "draws itself" ahead of the moving token.
+function animationFrame(state, tMs) {
+  const s = normalizeBoardState(state);
+  const { pitchH } = boardDims(s);
+  const px = (x) => M + x * (VB_W - 2 * M);
+  const py = (y) => M + y * (pitchH - 2 * M);
+  const toNorm = (p) => ({ x: clamp((p.x - M) / (VB_W - 2 * M), 0, 1), y: clamp((p.y - M) / (pitchH - 2 * M), 0, 1) });
+  const steps = s.animation.steps;
+  const pos = new Map(s.tokens.map((t) => [t.id, { x: t.x, y: t.y }]));
+  const totalMs = steps.reduce((sum, st) => sum + (st.durMs || 1200), 0);
+  let activeIndex = -1, activePartialPts = null, activeHead = null, activeColor = "#FFFFFF";
+  let cursor = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const st = steps[i];
+    const dur = st.durMs || 1200;
+    const start = cursor, end = cursor + dur;
+    const cur = pos.get(st.tokenId) || { x: 0.5, y: 0.5 };
+    const rawPts = stepPointsPx(st, s, px, py);
+    if (rawPts.length < 2) { cursor = end; continue; }
+    const leadPx = { x: px(cur.x), y: py(cur.y) };
+    const pts = (Math.hypot(rawPts[0].x - leadPx.x, rawPts[0].y - leadPx.y) > 2)
+      ? [leadPx, ...rawPts] : rawPts;
+    const len = polylineLenPx(pts);
+    if (tMs >= end) {
+      let ep = toNorm(pts[pts.length - 1]);
+      if (st.receiverId && pos.has(st.receiverId)) ep = pos.get(st.receiverId);
+      pos.set(st.tokenId, ep);
+    } else if (tMs >= start) {
+      activeIndex = i;
+      const head = pointAtLenPx(pts, ((tMs - start) / dur) * len);
+      activeHead = head;
+      activePartialPts = partialPolyline(pts, ((tMs - start) / dur) * len);
+      activeColor = stepColor(st, s);
+      pos.set(st.tokenId, toNorm(head));
+      break;
+    } else {
+      break;
+    }
+    cursor = end;
+  }
+  return { pos, activeIndex, activePartialPts, activeHead, activeColor, totalMs };
+}
+// Board state with tokens moved to where they are at tMs (for rendering).
+function animatedBoardState(state, tMs) {
+  const s = normalizeBoardState(state);
+  const { pos } = animationFrame(s, tMs);
+  if (!pos.size) return s;
+  return { ...s, tokens: s.tokens.map((t) => (pos.has(t.id) ? { ...t, x: pos.get(t.id).x, y: pos.get(t.id).y } : t)) };
+}
+const stepColor = (step, state) => {
+  if (step.path?.kind === "arrow") {
+    const a = (state.arrows || []).find((x) => x.id === step.path.arrowId);
+    if (a) return ARROW_COLORS[a.color] || "#FFFFFF";
+  }
+  return "#FFFFFF";
+};
+
+// Wall-clock playback clock (rAF): play / pause / restart / seek / speed.
+function usePlayback(totalMs) {
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeedState] = useState(1);
+  const tRef = useRef(0);
+  const speedRef = useRef(1);
+  const totalRef = useRef(totalMs);
+  const rafRef = useRef(null);
+  const lastRef = useRef(0);
+  const stopLoop = () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); rafRef.current = null; };
+  useEffect(() => () => stopLoop(), []);
+  useEffect(() => { // keep the clock inside the timeline when steps change
+    totalRef.current = totalMs;
+    if (tRef.current > totalMs) { tRef.current = totalMs; setT(totalMs); }
+  }, [totalMs]);
+  const tick = (now) => {
+    const dt = now - lastRef.current;
+    lastRef.current = now;
+    tRef.current = Math.min(tRef.current + dt * speedRef.current, totalRef.current);
+    setT(tRef.current);
+    if (tRef.current >= totalRef.current) { setPlaying(false); rafRef.current = null; return; }
+    rafRef.current = requestAnimationFrame(tick);
+  };
+  const play = () => {
+    if (totalRef.current <= 0) return;
+    if (tRef.current >= totalRef.current) { tRef.current = 0; setT(0); }
+    lastRef.current = performance.now();
+    setPlaying(true);
+    stopLoop();
+    rafRef.current = requestAnimationFrame(tick);
+  };
+  const pause = () => { stopLoop(); setPlaying(false); };
+  const restart = () => {
+    if (totalRef.current <= 0) return;
+    stopLoop();
+    tRef.current = 0; setT(0);
+    lastRef.current = performance.now();
+    setPlaying(true);
+    rafRef.current = requestAnimationFrame(tick);
+  };
+  const seek = (ms) => { const v = clamp(ms, 0, totalRef.current); tRef.current = v; setT(v); };
+  const setSpeed = (s) => { speedRef.current = s; setSpeedState(s); };
+  return { t, playing, speed, play, pause, restart, seek, setSpeed, toggle: () => (playing ? pause() : play()) };
+}
+
+// ─── video export ──────────────────────────────────────────────────────────
+// MediaRecorder + canvas.captureStream, rendered frame-by-frame offscreen
+// from the same BoardSvg the studio draws. The video is a download on
+// demand — it is NOT stored in Firestore; only the animation data saves
+// with the drill.
+function videoExportSupported() {
+  if (typeof window === "undefined") return false;
+  if (typeof MediaRecorder === "undefined") return false;
+  const c = document.createElement("canvas");
+  return typeof c.captureStream === "function";
+}
+function pickVideoMime() {
+  if (typeof MediaRecorder === "undefined") return null;
+  const cands = ["video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+  for (const m of cands) {
+    try { if (MediaRecorder.isTypeSupported(m)) return m; } catch { /* older browsers */ }
+  }
+  return null;
+}
+const slugifyTitle = (t) => (String(t || "drill").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "drill");
+// Render the playback to a video blob. Returns { blob, ext, filename } or
+// { error } on failure. The clock advances by wall time, so the timing stays
+// right even if a frame is slow to rasterize.
+async function exportAnimationVideo(state, { title = "drill", onProgress } = {}) {
+  const norm = normalizeBoardState(state);
+  const totalMs = animationTotalMs(norm);
+  if (!totalMs) return { error: "No animation to export." };
+  if (!videoExportSupported()) return { error: "Video export isn't supported in this browser — playback still works in the app." };
+  const mime = pickVideoMime();
+  if (!mime) return { error: "This browser can't record video — playback still works in the app." };
+  const { vbH } = boardDims(norm);
+  const scale = 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = VB_W * scale;
+  canvas.height = Math.round(vbH * scale);
+  const ctx = canvas.getContext("2d");
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-99999px;top:0;pointer-events:none;";
+  host.style.width = `${VB_W}px`;
+  host.style.height = `${vbH}px`;
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const stream = canvas.captureStream(30);
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const done = new Promise((resolve) => { rec.onstop = resolve; });
+  const renderFrame = async (tMs) => {
+    const frameState = animatedBoardState(norm, tMs);
+    const frame = animationFrame(norm, tMs);
+    flushSync(() => {
+      root.render(
+        <div style={{ width: VB_W, height: vbH, position: "relative", background: "#FFFFFF" }}>
+          <BoardSvg state={frameState} showLegend className="" />
+        </div>,
+      );
+    });
+    // Let the browser paint the freshly-rendered SVG before snapshotting.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const svgEl = host.querySelector("svg");
+    const clone = svgEl.cloneNode(true);
+    clone.setAttribute("width", VB_W);
+    clone.setAttribute("height", vbH);
+    let xml = new XMLSerializer().serializeToString(clone);
+    // The in-progress path draws itself in the video too — inject it into
+    // the serialized board (same viewBox, so the coordinates line up).
+    if (frame.activePartialPts && frame.activePartialPts.length > 1) {
+      const overlay = `<polyline points="${frame.activePartialPts.map((p) => `${p.x},${p.y}`).join(" ")}" fill="none" stroke="${frame.activeColor}" stroke-width="6" stroke-linecap="round" opacity="0.85"/>`
+        + (frame.activeHead ? `<circle cx="${frame.activeHead.x}" cy="${frame.activeHead.y}" r="9" fill="${frame.activeColor}" stroke="#0F172A" stroke-width="2"/>` : "");
+      xml = xml.replace(/<\/svg>\s*$/, `${overlay}</svg>`);
+    }
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error("Could not render a video frame."));
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+    });
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  try {
+    rec.start(250);
+    const start = performance.now();
+    let tMs = 0;
+    for (;;) {
+      const elapsed = performance.now() - start;
+      tMs = Math.min(elapsed, totalMs);
+      await renderFrame(tMs);
+      if (onProgress) onProgress(tMs / totalMs);
+      if (tMs >= totalMs) break;
+    }
+    rec.stop();
+    await done;
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+  if (!chunks.length) return { error: "The video came out empty — playback still works in the app." };
+  const ext = mime.includes("mp4") ? "mp4" : "webm";
+  return { blob: new Blob(chunks, { type: mime }), ext, filename: `${slugifyTitle(title)}-animation.${ext}` };
+}
+
+// Hook: export state for one Export video button (studio + player share it).
+function useVideoExport() {
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState("");
+  const canExport = useMemo(() => videoExportSupported(), []);
+  const runExport = async (state, title) => {
+    if (exporting || !canExport) return;
+    setExporting(true);
+    setProgress(0);
+    setError("");
+    try {
+      const res = await exportAnimationVideo(state, { title, onProgress: setProgress });
+      if (res.error) { setError(res.error); return; }
+      if (res.blob) {
+        const url = URL.createObjectURL(res.blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = res.filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+    } catch {
+      setError("Video export failed — playback still works in the app.");
+    } finally {
+      setExporting(false);
+      setProgress(0);
+    }
+  };
+  return { exporting, progress, error, canExport, runExport };
+}
+
+// Transport bar: Play / Pause / Restart + scrubber + speed + Export video.
+// Shared by the studio and the view-only player.
+function PlaybackBar({ pb, totalMs, vx, onExport }) {
+  const fmt = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+  const canPlay = totalMs > 0;
+  return (
+    <div className="bg-slate-900 border-t border-white/10 shrink-0">
+      <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
+        <button onClick={pb.toggle} disabled={!canPlay} aria-label={pb.playing ? "Pause" : "Play"}
+          className="w-11 h-11 rounded-full bg-sky-500 text-white flex items-center justify-center flex-shrink-0 disabled:opacity-40">
+          {pb.playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+        </button>
+        <button onClick={pb.restart} disabled={!canPlay} aria-label="Restart"
+          className="w-11 h-11 rounded-full bg-white/10 text-white flex items-center justify-center flex-shrink-0 disabled:opacity-40">
+          <RotateCcw className="w-5 h-5" />
+        </button>
+        <input type="range" min={0} max={totalMs} step={50} value={Math.round(pb.t)} aria-label="Seek"
+          onChange={(e) => pb.seek(Number(e.target.value))}
+          onPointerDown={() => pb.pause()}
+          disabled={!canPlay}
+          className="flex-1 min-w-24 h-11 accent-sky-400 disabled:opacity-40" />
+        <span className="text-[11px] font-bold text-white/70 whitespace-nowrap tabular-nums">{fmt(pb.t)} / {fmt(totalMs)}</span>
+        <button onClick={() => pb.setSpeed(pb.speed === 1 ? 2 : 1)} disabled={!canPlay}
+          className="w-11 h-11 rounded-full bg-white/10 text-white text-sm font-black flex items-center justify-center flex-shrink-0 disabled:opacity-40">
+          {pb.speed}×
+        </button>
+        <button onClick={onExport} disabled={!vx.canExport || vx.exporting || !canPlay}
+          title={vx.canExport ? "Download the animation as a video file" : "Video export isn't supported in this browser — playback still works in the app"}
+          className="h-11 px-4 rounded-full bg-white text-slate-900 text-sm font-bold flex items-center gap-1.5 flex-shrink-0 disabled:opacity-40">
+          <Video className="w-4 h-4" />
+          {vx.exporting ? `Saving ${Math.round(vx.progress * 100)}%…` : "Export video"}
+        </button>
+        <span className="text-[10px] text-white/40 w-full sm:w-auto">Saves with the drill · Video exports as a file</span>
+      </div>
+      {vx.error && <div className="px-3 pb-2 text-[11px] font-semibold text-amber-300">{vx.error}</div>}
+    </div>
+  );
+}
+
+// View-only player: plays a saved animation from a drill detail without
+// opening the editor. Mounted as a full-screen overlay by the drill detail.
+export function BoardPlayer({ state, title = "Drill", onClose }) {
+  const norm = useMemo(() => normalizeBoardState(state), [state]);
+  const steps = norm.animation.steps;
+  const totalMs = useMemo(() => steps.reduce((s, st) => s + (st.durMs || 1200), 0), [steps]);
+  const pb = usePlayback(totalMs);
+  const vx = useVideoExport();
+  const frame = useMemo(() => animationFrame(norm, pb.t), [norm, pb.t]);
+  const animated = useMemo(() => animatedBoardState(norm, pb.t), [norm, pb.t]);
+  const { vbH } = boardDims(norm);
+  if (!steps.length) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center gap-4 p-6 text-white">
+        <p className="text-sm font-bold text-white/70">No animation saved for this drill yet.</p>
+        <button onClick={onClose} className="px-5 py-3 rounded-full bg-white text-slate-900 text-sm font-bold min-h-11">Close</button>
+      </div>
+    );
+  }
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col text-white">
+      <div className="flex items-center gap-2 px-3 py-2 shrink-0">
+        <Play className="w-4 h-4 text-sky-400 flex-shrink-0" />
+        <span className="text-sm font-bold truncate flex-1">{title}</span>
+        <button onClick={onClose} aria-label="Close" className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0"><X className="w-5 h-5" /></button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-3">
+        <div className="relative w-full max-w-3xl">
+          <BoardSvg state={animated} showLegend className="w-full" />
+          <svg viewBox={`0 0 ${VB_W} ${vbH}`} className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden="true">
+            {frame.activePartialPts && frame.activePartialPts.length > 1 && (
+              <polyline points={frame.activePartialPts.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke={frame.activeColor} strokeWidth={6} strokeLinecap="round" opacity={0.85} />
+            )}
+            {frame.activeHead && <circle cx={frame.activeHead.x} cy={frame.activeHead.y} r={9} fill={frame.activeColor} stroke="#0F172A" strokeWidth={2} />}
+          </svg>
+        </div>
+      </div>
+      <PlaybackBar pb={pb} totalMs={totalMs} vx={vx} onExport={() => vx.runExport(norm, title)} />
+    </div>
+  );
+}
+
 // ─── Diagram Studio (full-screen editor) ───────────────────────────────────
 
 const PALETTE = [
@@ -404,6 +800,9 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
   const [tokens, setTokens] = useState(init.tokens);
   const [arrows, setArrows] = useState(init.arrows);
   const [zones, setZones] = useState(init.zones);
+  const [animation, setAnimation] = useState(init.animation || { steps: [] });
+  const [animMode, setAnimMode] = useState(false); // recording a track for a token
+  const [animTokenId, setAnimTokenId] = useState(null); // token being tracked
   const [sel, setSel] = useState([]); // ids across tokens/arrows/zones
   const [view, setView] = useState({ zoom: 1, pan: { x: 0, y: 0 } });
   const [base, setBase] = useState({ w: 680, h: 400, cw: 800, ch: 600 });
@@ -433,7 +832,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
   const dims = boardDims({ field, lengthYd, widthYd });
   const { preset, wYd, dYd, pitchH, vbH } = dims;
   const { zoom, pan } = view;
-  const state = () => ({ field, lengthYd, widthYd, tokens, arrows, zones });
+  const state = () => ({ field, lengthYd, widthYd, tokens, arrows, zones, animation });
   const snapLines = useMemo(() => pitchSnapLines({ field, lengthYd, widthYd }), [field, lengthYd, widthYd]);
 
   // Live state for the test harness / parent (read-only notification, not
@@ -504,24 +903,25 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
 
   // ── undo / redo ──────────────────────────────────────────────────────────
   const snapshot = () => {
-    undoStack.current.push({ field, lengthYd, widthYd, tokens: [...tokens], arrows: [...arrows], zones: [...zones] });
+    undoStack.current.push({ field, lengthYd, widthYd, tokens: [...tokens], arrows: [...arrows], zones: [...zones], animation });
     if (undoStack.current.length > 60) undoStack.current.shift();
     redoStack.current = [];
   };
   const applySnap = (s) => {
     setField(s.field); setLengthYd(s.lengthYd); setWidthYd(s.widthYd);
     setTokens(s.tokens); setArrows(s.arrows); setZones(s.zones || []); setSel([]);
+    setAnimation(s.animation || { steps: [] });
   };
   const undo = () => {
     const prev = undoStack.current.pop();
     if (!prev) return;
-    redoStack.current.push({ field, lengthYd, widthYd, tokens, arrows, zones });
+    redoStack.current.push({ field, lengthYd, widthYd, tokens, arrows, zones, animation });
     applySnap(prev);
   };
   const redo = () => {
     const nxt = redoStack.current.pop();
     if (!nxt) return;
-    undoStack.current.push({ field, lengthYd, widthYd, tokens, arrows, zones });
+    undoStack.current.push({ field, lengthYd, widthYd, tokens, arrows, zones, animation });
     applySnap(nxt);
   };
 
@@ -653,7 +1053,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
     setSel([]);
   };
   const setLabel = (id, label) => setTokens((ts) => ts.map((t) => (t.id === id ? { ...t, label: label.slice(0, 3) } : t)));
-  const clearBoard = () => { snapshot(); setTokens([]); setArrows([]); setZones([]); setSel([]); };
+  const clearBoard = () => { snapshot(); setTokens([]); setArrows([]); setZones([]); setSel([]); setAnimation({ steps: [] }); setAnimTokenId(null); };
   const changeField = (f) => {
     const preset = BOARD_PRESETS.find((p) => p.id === f);
     if (!preset) return;
@@ -738,6 +1138,70 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
     }]);
     setAim(null);
     setArmed(null);
+  };
+
+  // ── animation recording ──────────────────────────────────────────────────
+  // Valid steps for the current board (drops steps whose token/arrow is gone).
+  const animSteps = useMemo(() => normalizeAnimation(animation, tokens, arrows).steps, [animation, tokens, arrows]);
+  const animTotalMs = useMemo(() => animSteps.reduce((s, st) => s + (st.durMs || 1200), 0), [animSteps]);
+  const pb = usePlayback(animTotalMs);
+  const vx = useVideoExport();
+  const animToken = animTokenId ? tokens.find((t) => t.id === animTokenId) : null;
+  // Where a token ends up after all of its recorded steps (a new track
+  // starts there, so the token never teleports when the next step plays).
+  const tokenSeqEnd = (tokenId) => {
+    const f = animationFrame({ field, lengthYd, widthYd, tokens, arrows, zones, animation: { steps: animSteps } }, animTotalMs);
+    return f.pos.get(tokenId) || tokens.find((t) => t.id === tokenId) || { x: 0.5, y: 0.5 };
+  };
+  // A token near an arrow's end (within ~24 screen px) receives the ball.
+  const receiverNear = (to) => {
+    const r = rectOfSvg();
+    const thr = r ? (24 * VB_W) / r.width : 0.035;
+    let found;
+    tokens.forEach((t) => {
+      if (t.id === animTokenId) return;
+      if (Math.hypot(t.x - to.x, t.y - to.y) < thr) found = t.id;
+    });
+    return found;
+  };
+  const addArrowStep = (arrowId) => {
+    const a = arrows.find((x) => x.id === arrowId);
+    if (!a || !animTokenId) return;
+    const durMs = defaultStepDurMs(arrowGeom(a, px, py).pts);
+    const receiverId = receiverNear(a.to);
+    snapshot();
+    setAnimation((an) => ({ steps: [...(an?.steps || []), { id: rid(), tokenId: animTokenId, path: { kind: "arrow", arrowId }, durMs, ...(receiverId ? { receiverId } : {}) }] }));
+  };
+  const addFreehandStep = (pts) => {
+    if (!animTokenId || !pts || pts.length < 2) return false;
+    const end = tokenSeqEnd(animTokenId);
+    const dx = end.x - pts[0].x, dy = end.y - pts[0].y;
+    const moved = pts.map((p) => ({ x: clamp01(p.x + dx), y: clamp01(p.y + dy) }));
+    const durMs = defaultStepDurMs(moved.map((p) => ({ x: px(p.x), y: py(p.y) })));
+    snapshot();
+    setAnimation((an) => ({ steps: [...(an?.steps || []), { id: rid(), tokenId: animTokenId, path: { kind: "freehand", points: moved }, durMs }] }));
+    // Leave a visible freehand arrow on the board so the track shows
+    // on the static diagram too.
+    setArrows((as) => [...as, { id: rid(), kind: "freehand", from: moved[0], to: moved[moved.length - 1], points: moved, color: arrowColor }]);
+    return true;
+  };
+  const moveStep = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= animSteps.length) return;
+    snapshot();
+    setAnimation((an) => {
+      const steps = [...(an?.steps || [])];
+      [steps[idx], steps[j]] = [steps[j], steps[idx]];
+      return { steps };
+    });
+  };
+  const deleteStep = (idx) => {
+    snapshot();
+    setAnimation((an) => ({ steps: (an?.steps || []).filter((_, i) => i !== idx) }));
+  };
+  const clearAnimation = () => {
+    snapshot();
+    setAnimation({ steps: [] });
   };
 
   // ── save / export ────────────────────────────────────────────────────────
@@ -845,6 +1309,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
     try { svgRef.current.setPointerCapture?.(e.pointerId); } catch { /* noop */ }
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 2) { startPinch(); return; }
+    if (pb.playing) return; // editing is gated while the animation plays — pause to edit
     if (e.button === 1 || spaceDown.current) {
       gesture.current = { type: "pan", sx: e.clientX, sy: e.clientY, pan: { ...pan } };
       return;
@@ -884,6 +1349,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
     if (tokEl) {
       const id = tokEl.dataset.tid;
       selectId(id, e.shiftKey);
+      if (animMode) setAnimTokenId(id); // Animate: tap a player or the ball to track it
       gesture.current = { type: "drag-token", id, moved: false };
       startLongPress(id);
       return;
@@ -891,6 +1357,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
     const arrEl = e.target.closest?.("[data-aid]");
     if (arrEl) {
       const id = arrEl.dataset.aid;
+      if (animMode && animTokenId) { addArrowStep(id); return; } // Animate: tap an arrow — the tracked token follows it
       selectId(id, e.shiftKey);
       startLongPress(id);
       return;
@@ -1058,8 +1525,11 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
         const pts = draftFree;
         setDraftFree(null);
         if (pts && pts.length > 2) {
-          snapshot();
-          setArrows((as) => [...as, { id: rid(), kind: "freehand", from: pts[0], to: pts[pts.length - 1], points: pts, color: arrowColor }]);
+          if (animMode && animTokenId) addFreehandStep(pts); // Animate: the drawn track becomes the next step
+          else {
+            snapshot();
+            setArrows((as) => [...as, { id: rid(), kind: "freehand", from: pts[0], to: pts[pts.length - 1], points: pts, color: arrowColor }]);
+          }
         }
         setArmed(null);
         break;
@@ -1104,6 +1574,10 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
   useEffect(() => {
     api.current = {
       undo, redo, removeSelected, duplicateSelection,
+      pausePlayback: () => pb.pause(),
+      playing: pb.playing,
+      animMode,
+      exitAnimMode: () => { setAnimMode(false); setAnimTokenId(null); },
       nudge: (dx, dy) => {
         if (!sel.length) return;
         snapshot();
@@ -1128,7 +1602,9 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
       if (e.key === " ") { spaceDown.current = true; e.preventDefault(); return; }
       if (e.key === "Alt") { altDown.current = true; return; }
       if (e.key === "Escape") {
-        if (aim) { setAim(null); setArmed(null); }
+        if (a.playing) { a.pausePlayback(); }
+        else if (a.animMode) { a.exitAnimMode(); }
+        else if (aim) { setAim(null); setArmed(null); }
         else if (armed) setArmed(null);
         else if (sel.length) setSel([]);
         else onClose?.();
@@ -1179,7 +1655,9 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
   const selToken = selItems.length === 1 && selItems[0].type === "token" ? selItems[0].item : null;
   const selArrow = selItems.length === 1 && selItems[0].type === "arrow" ? selItems[0].item : null;
   const selZone = selItems.length === 1 && selItems[0].type === "zone" ? selItems[0].item : null;
-  const hint = aim ? "Click where it ends — then drag the dot to bend it"
+  const hint = pb.playing ? "Playing — pause to edit the board"
+    : animMode ? (animToken ? `Tracking ${animToken.label || animToken.kind} — draw its track or tap an arrow` : "Animate: tap a player or the ball to track it")
+    : aim ? "Click where it ends — then drag the dot to bend it"
     : armed?.tool === "place" ? `Tap the pitch to place a ${armed.kind} — or drag it in`
     : armed?.tool === "arrow" ? `Click where the ${armed.kind} starts, then where it ends`
     : armed?.tool === "zone" ? "Drag on the pitch to draw the zone"
@@ -1189,6 +1667,11 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
 
   const o = origin(view);
   const aimLockToken = aim?.lockId ? tokens.find((t) => t.id === aim.lockId) : null;
+  // Playback frame for the editor: while playing (or paused mid-way) tokens
+  // render at their animated positions, and the in-progress path draws itself.
+  const playState = (pb.t > 0 || pb.playing)
+    ? animationFrame({ field, lengthYd, widthYd, tokens, arrows, zones, animation: { steps: animSteps } }, pb.t)
+    : null;
 
   const rotateToken = (id, deg) => {
     snapshot();
@@ -1228,6 +1711,7 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
         </div>
         <button onClick={() => setSnapOn((s) => !s)} aria-pressed={snapOn} title="Snap to objects & pitch lines (S)" className={iconBtn(snapOn)}><Magnet className="w-4 h-4" /></button>
         <button onClick={() => setShowGrid((g) => !g)} aria-pressed={showGrid} title="Show 5-yard grid (G)" className={iconBtn(showGrid)}><LayoutGrid className="w-4 h-4" /></button>
+        <button onClick={() => { if (animMode) setAnimTokenId(null); setAnimMode(!animMode); }} aria-pressed={animMode} title="Animate — record player & ball movement, then press play" className={iconBtn(animMode)}><Clapperboard className="w-4 h-4" /></button>
         <div className="ml-auto flex items-center gap-2 shrink-0 pl-2">
           <button onClick={save} disabled={busy} className="flex items-center gap-1.5 text-xs font-bold px-4 py-2.5 rounded-full text-white min-h-11 disabled:opacity-50" style={{ backgroundColor: TEAM_COLORS.focus }}><Save className="w-3.5 h-3.5" /> {busy ? "Saving…" : "Save"}</button>
           <button onClick={onClose} aria-label="Close board" className={iconBtn(false)}><X className="w-4 h-4" /></button>
@@ -1312,15 +1796,17 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
                 <ArrowShape key={a.id} a={a} index={i} px={px} py={py} interactive selected={sel.includes(a.id)} />
               ))}
 
-              {/* tokens */}
+              {/* tokens — at their animated position while playing/paused */}
               {tokens.map((t) => {
-                const x = px(t.x), y = py(t.y);
+                const disp = playState?.pos.get(t.id);
+                const x = px(disp ? disp.x : t.x), y = py(disp ? disp.y : t.y);
                 const selected = sel.includes(t.id);
                 const half = TOKEN_HALF[t.kind] || 19;
                 return (
                   <g key={t.id} data-tid={t.id} style={{ cursor: "grab" }}>
                     <circle cx={x} cy={y} r={HIT_R} fill="transparent" />
                     {selected && <circle cx={x} cy={y} r={half + 8} fill="none" stroke="#38BDF8" strokeWidth={3} strokeDasharray="3 3" style={{ pointerEvents: "none" }} />}
+                    {animMode && animTokenId === t.id && <circle cx={x} cy={y} r={half + 8} fill="none" stroke="#FACC15" strokeWidth={3} style={{ pointerEvents: "none" }} />}
                     <TokenGlyph t={t} x={x} y={y} />
                     {selected && EQUIPMENT_KINDS.has(t.kind) && (
                       <g>
@@ -1332,6 +1818,14 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
                   </g>
                 );
               })}
+
+              {/* in-progress path — draws itself ahead of the moving token */}
+              {playState?.activePartialPts && playState.activePartialPts.length > 1 && (
+                <g style={{ pointerEvents: "none" }}>
+                  <polyline points={playState.activePartialPts.map((p) => `${p.x},${p.y}`).join(" ")} fill="none" stroke={playState.activeColor} strokeWidth={6} strokeLinecap="round" opacity={0.85} />
+                  {playState.activeHead && <circle cx={playState.activeHead.x} cy={playState.activeHead.y} r={9} fill={playState.activeColor} stroke="#0F172A" strokeWidth={2} />}
+                </g>
+              )}
 
               {/* arrow aim ghost (click start → click end, live preview) */}
               {aim && (
@@ -1387,7 +1881,33 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
         {/* selection inspector — right rail on desktop, sheet on phone.
             Always rendered on desktop so selecting never resizes the pitch
             mid-drag (a layout jump at grab time feels broken). */}
-        <aside className={`order-3 w-full md:w-60 md:border-l border-t md:border-t-0 border-white/10 bg-slate-900 overflow-y-auto max-h-48 md:max-h-none p-3 space-y-3 shrink-0 ${selItems.length === 0 ? "hidden md:block" : ""}`}>
+        <aside className={`order-3 w-full md:w-60 md:border-l border-t md:border-t-0 border-white/10 bg-slate-900 overflow-y-auto max-h-48 md:max-h-none p-3 space-y-3 shrink-0 ${selItems.length === 0 && !animMode && animSteps.length === 0 ? "hidden md:block" : ""}`}>
+          {/* animation steps — recorded tracks, in play order */}
+          {(animMode || animSteps.length > 0) && (
+            <div className="space-y-2 pb-3 border-b border-white/10">
+              <div className="text-[10px] font-black uppercase tracking-wider text-white/40">Animation · {animSteps.length} step{animSteps.length === 1 ? "" : "s"}</div>
+              {animSteps.length === 0 ? (
+                <p className="text-xs text-white/50 leading-relaxed">Tap a player or the ball, then draw its track or tap an arrow — each one becomes a step.</p>
+              ) : (
+                <ol className="space-y-1">
+                  {animSteps.map((st, i) => {
+                    const tok = tokens.find((t) => t.id === st.tokenId);
+                    return (
+                      <li key={st.id} className="flex items-center gap-1.5 bg-white/5 rounded-lg px-2 py-1.5">
+                        <span className="w-5 h-5 rounded-full bg-sky-500 text-white text-[11px] font-black flex items-center justify-center flex-shrink-0">{i + 1}</span>
+                        <span className="flex-1 min-w-0 text-xs font-bold text-white truncate">{tok ? (tok.label || tok.kind) : "?"}</span>
+                        <span className="text-[10px] font-semibold text-white/50 whitespace-nowrap">{st.path.kind === "arrow" ? "arrow" : "track"} · {(st.durMs / 1000).toFixed(1)}s</span>
+                        <button onClick={() => moveStep(i, -1)} disabled={i === 0 || pb.playing} aria-label="Move step up" className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center disabled:opacity-30"><ChevronUp className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => moveStep(i, 1)} disabled={i === animSteps.length - 1 || pb.playing} aria-label="Move step down" className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center disabled:opacity-30"><ChevronDown className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => deleteStep(i)} disabled={pb.playing} aria-label="Delete step" className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center disabled:opacity-30"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
+              {animSteps.length > 0 && <button onClick={clearAnimation} disabled={pb.playing} className="text-[11px] font-bold px-3 py-2 rounded-full bg-white/10 text-white min-h-9 disabled:opacity-40">Clear animation</button>}
+            </div>
+          )}
           {selItems.length > 0 ? (
             <>
             {selToken && (
@@ -1495,6 +2015,11 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
         </span>
         <button onClick={clearBoard} className="ml-auto flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white/10 text-white min-h-11 shrink-0"><RotateCcw className="w-3.5 h-3.5" /> Clear</button>
       </div>
+
+      {/* playback transport — appears when steps exist or Animate is on */}
+      {(animSteps.length > 0 || animMode) && (
+        <PlaybackBar pb={pb} totalMs={animTotalMs} vx={vx} onExport={() => vx.runExport(state(), title)} />
+      )}
 
       {/* hint bar + legend */}
       <div className="bg-slate-900 border-t border-white/5 px-3 py-1.5 flex items-center gap-3 shrink-0">

@@ -11,6 +11,18 @@
 //     bend = optional quadratic control point {x,y} — a bent (curved) arrow;
 //       absent = straight. points = freehand polyline [{x,y}…] (kind 'freehand').
 //   zone:  { id, shape: 'rect'|'circle', x, y, w, h }   (x,y,w,h normalized 0..1)
+//   animation?: { steps: [...] } — recorded movement, played back in the
+//     studio and from the drill detail ("Play the drill"). A step moves ONE
+//     token along ONE path, in list order (steps play one after another):
+//       { id, tokenId, path, durMs, receiverId? }
+//       path = { kind: 'arrow', arrowId } — follow an existing arrow
+//              (its centreline, bend included), or
+//              { kind: 'freehand', points: [{x,y}…] } — a drawn track
+//       durMs = how long the step takes (recorded from the path length)
+//       receiverId = a token near the path's end (a pass target); the moving
+//              token ends ON that token's position at the end of the step.
+//     Absent = a static diagram (no Play button, nothing changes).
+//     Steps whose token/arrow no longer exists are dropped on load.
 //
 // Arrow legend (fixed everywhere — printed on every diagram export):
 //   pass = solid line, OPEN arrowhead · run = dashed · dribble = wavy
@@ -108,6 +120,32 @@ export const BOARD_PRESETS = [
   { id: "grid", label: "Grid / zone", lengthYd: 30, widthYd: 20, orient: "landscape", note: "custom yd" },
 ];
 
+// Validate a recorded animation against the board it belongs to: drop
+// steps whose token is gone, whose arrow is gone, or whose track is too
+// short to follow. Unknown fields ride along untouched (forward-compat).
+export function normalizeAnimation(raw, tokens, arrows) {
+  const tokenIds = new Set((tokens || []).map((t) => t.id));
+  const arrowIds = new Set((arrows || []).map((a) => a.id));
+  const stepsIn = Array.isArray(raw?.steps) ? raw.steps : [];
+  const steps = [];
+  stepsIn.forEach((s, i) => {
+    if (!s || !tokenIds.has(s.tokenId)) return;
+    const durMs = Math.max(300, Math.min(10000, Number(s.durMs) || 1200));
+    const receiverId = tokenIds.has(s.receiverId) && s.receiverId !== s.tokenId ? s.receiverId : undefined;
+    if (s.path?.kind === "arrow") {
+      if (!arrowIds.has(s.path.arrowId)) return;
+      steps.push({ id: typeof s.id === "string" && s.id ? s.id : `step-${i}`, tokenId: s.tokenId, path: { kind: "arrow", arrowId: s.path.arrowId }, durMs, ...(receiverId ? { receiverId } : {}) });
+    } else if (s.path?.kind === "freehand" && Array.isArray(s.path.points)) {
+      const points = s.path.points
+        .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+        .map((p) => ({ x: Math.max(0, Math.min(1, p.x)), y: Math.max(0, Math.min(1, p.y)) }));
+      if (points.length < 2) return;
+      steps.push({ id: typeof s.id === "string" && s.id ? s.id : `step-${i}`, tokenId: s.tokenId, path: { kind: "freehand", points }, durMs, ...(receiverId ? { receiverId } : {}) });
+    }
+  });
+  return { steps };
+}
+
 // Back-compat: map the old board state (field/tokens/arrows only) to v2.
 export function normalizeBoardState(initial) {
   const raw = initial || {};
@@ -116,13 +154,17 @@ export function normalizeBoardState(initial) {
   const preset = BOARD_PRESETS.find((p) => p.id === field);
   const tokenMap = { home: "focus", away: "opp", neutral: "gk" };
   const arrowMap = { run: "run", pass: "pass", dribble: "dribble", line: "direction" };
+  const tokens = (raw.tokens || []).map((t) => ({ ...t, kind: tokenMap[t.kind] || t.kind || "focus" }));
+  const arrows = (raw.arrows || []).map((a) => ({ ...a, kind: arrowMap[a.kind] || a.kind || "run" }));
+  const zones = (raw.zones || []).filter((z) => z && (z.shape === "rect" || z.shape === "circle"));
   return {
     field,
     lengthYd: Number(raw.lengthYd) > 0 ? Number(raw.lengthYd) : preset.lengthYd,
     widthYd: Number(raw.widthYd) > 0 ? Number(raw.widthYd) : preset.widthYd,
-    tokens: (raw.tokens || []).map((t) => ({ ...t, kind: tokenMap[t.kind] || t.kind || "focus" })),
-    arrows: (raw.arrows || []).map((a) => ({ ...a, kind: arrowMap[a.kind] || a.kind || "run" })),
-    zones: (raw.zones || []).filter((z) => z && (z.shape === "rect" || z.shape === "circle")),
+    tokens,
+    arrows,
+    zones,
+    animation: normalizeAnimation(raw.animation, tokens, arrows),
   };
 }
 
