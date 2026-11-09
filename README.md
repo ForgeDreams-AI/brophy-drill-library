@@ -34,8 +34,19 @@ npm run dev
 
 ## Deploy
 
-Static site (Vite build output in `dist/`). Point hosting at the repo the same
-way the TeamHub app is hosted. No paid services — Firebase only.
+Static site (Vite build output in `dist/`). Firebase Hosting in the Brophy
+project (`brophy-soccer-app`), site `brophy-drill-library` — live at
+https://brophy-drill-library.web.app. First time only, create the site,
+then deploy from this repo:
+
+```bash
+firebase hosting:sites:create brophy-drill-library --project brophy-soccer-app
+npm run build
+firebase deploy --only hosting --project brophy-soccer-app
+```
+
+Always pass `--project brophy-soccer-app` — a stale `.firebaserc` once
+pointed elsewhere. No paid services — Firebase only.
 
 **Firestore rules:** `firestore.rules` in this repo covers only this site.
 Merge the `drillLibrary` block into the TeamHub app's `firestore.rules` in
