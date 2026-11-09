@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search, Plus, LogIn, LogOut, X, Clock, Users, LayoutGrid,
   ChevronLeft, Pencil, Copy, Trash2, Play, Link2, BookOpen,
-  Layers, Check, AlertTriangle, WifiOff, Inbox,
+  Layers, Check, AlertTriangle, WifiOff, Inbox, Printer,
 } from "lucide-react";
 import {
   collection, query, orderBy, onSnapshot, addDoc, updateDoc,
@@ -33,6 +33,7 @@ import { auth, db } from "./firebase";
 import { DRILL_CATEGORIES } from "./data/categories";
 import { normalizeDrillDoc, drillDocToForm, formToDrillPayload, DRILL_KIND } from "./lib/drillDoc";
 import TacticsBoard, { BoardSvg } from "./components/TacticsBoard";
+import DrillPrintSheet from "./components/DrillPrintSheet";
 import { ARROW_LEGEND, wavyPath } from "./components/boardData";
 
 // Classic Brophy (Option A, §11) — same palette as the main TeamHub app.
@@ -128,7 +129,9 @@ export function DrillCard({ drill, onOpen }) {
 }
 
 // ── drill detail ───────────────────────────────────────────────────────────
-export function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) {
+// canEdit = coaches + drill builders (see canBuild in App). The Print button
+// is for everyone — printing is read-only.
+export function DrillDetail({ drill, canEdit, onBack, onEdit, onDuplicate, onDelete, onPrint }) {
   const s = drill.setup || {};
   const embed = youTubeEmbed(drill.videoUrl);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -157,22 +160,27 @@ export function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDel
           <h1 className="mt-2 text-2xl sm:text-3xl font-black leading-tight" style={{ color: RED }}>{drill.title || drill.name}</h1>
           {drill.desc ? <p className="mt-2 text-slate-600 leading-relaxed">{drill.desc}</p> : null}
         </div>
-        {isCoach && (
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button onClick={onEdit} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
-              <Pencil className="w-3.5 h-3.5" /> Edit
-            </button>
-            <button onClick={onDuplicate} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
-              <Copy className="w-3.5 h-3.5" /> Duplicate
-            </button>
-            <button
-              onClick={() => (confirmDelete ? onDelete() : setConfirmDelete(true))}
-              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full min-h-11 ${confirmDelete ? "bg-red-600 text-white" : "bg-white border border-red-200 text-red-600"}`}
-            >
-              <Trash2 className="w-3.5 h-3.5" /> {confirmDelete ? "Confirm delete" : "Delete"}
-            </button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+          <button onClick={onPrint} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
+            <Printer className="w-3.5 h-3.5" /> Print / Save PDF
+          </button>
+          {canEdit && (
+            <>
+              <button onClick={onEdit} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
+                <Pencil className="w-3.5 h-3.5" /> Edit
+              </button>
+              <button onClick={onDuplicate} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white border border-slate-200 text-slate-700 min-h-11">
+                <Copy className="w-3.5 h-3.5" /> Duplicate
+              </button>
+              <button
+                onClick={() => (confirmDelete ? onDelete() : setConfirmDelete(true))}
+                className={`flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full min-h-11 ${confirmDelete ? "bg-red-600 text-white" : "bg-white border border-red-200 text-red-600"}`}
+              >
+                <Trash2 className="w-3.5 h-3.5" /> {confirmDelete ? "Confirm delete" : "Delete"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* diagram — photo from the video wins over a hand-drawn one, then
@@ -549,7 +557,7 @@ function SignInModal({ onClose }) {
           <h2 className="text-lg font-black" style={{ color: RED }}>Coach sign in</h2>
           <button onClick={onClose} aria-label="Close" className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center"><X className="w-4 h-4 text-slate-600" /></button>
         </div>
-        <p className="mt-1 text-sm text-slate-500">Sign in with your Brophy account. Only coaches can add or edit drills — players just browse.</p>
+        <p className="mt-1 text-sm text-slate-500">Sign in with your Brophy account. Only coaches and drill builders can add drills — everyone else just browses.</p>
         <button onClick={google} disabled={busy} className="mt-4 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12 disabled:opacity-50" style={{ backgroundColor: RED }}>
           <LogIn className="w-4 h-4" /> Continue with Google
         </button>
@@ -614,12 +622,19 @@ export default function App() {
   const [view, setView] = useState({ name: "library" }); // library | detail | form | inbox
   const [signInOpen, setSignInOpen] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [printDrill, setPrintDrill] = useState(null); // drill open in the print preview (DrillPrintSheet)
   const [incoming, setIncoming] = useState(() => parseIncoming());
   const [incomingStatus, setIncomingStatus] = useState(null); // saved | queued | already | error
   const [suggestions, setSuggestions] = useState([]);
   const timeoutRef = useRef(null);
 
   const isCoach = role === "admin" || role === "orgAdmin";
+  // Who can BUILD drills (open the form, create/edit/delete, use the
+  // studio): coaches plus the drillBuilder role — a person who builds drills
+  // in this library but has no team-app access. The Review queue stays
+  // coach-only (isCoach): a drillBuilder never sees it, approves, or
+  // dismisses. Browsing stays public, suggesting stays any-signed-in-user.
+  const canBuild = isCoach || role === "drillBuilder";
 
   // Incoming video-library pick → the review queue (limbo). Any signed-in
   // user can suggest; only coaches see the queue and approve. Runs once the
@@ -759,7 +774,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: "#F4F6F8" }}>
+    <>
+    {/* .app-shell: hidden in print — only #print-sheet prints (see index.css). */}
+    <div className="app-shell min-h-screen" style={{ backgroundColor: "#F4F6F8" }}>
       {/* header */}
       <header style={{ backgroundColor: RED }} className="text-white">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
@@ -771,7 +788,7 @@ export default function App() {
             <h1 className="text-xl sm:text-2xl font-black leading-tight">Drill Library</h1>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            {isCoach && (
+            {canBuild && (
               <button onClick={() => openForm(null)} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full min-h-11 text-white" style={{ backgroundColor: "#FFFFFF", color: RED }}>
                 <Plus className="w-4 h-4" /> <span className="hidden sm:inline">Add drill</span><span className="sm:hidden">Add</span>
               </button>
@@ -797,7 +814,7 @@ export default function App() {
         </div>
         <div className="border-t border-white/10">
           <div className="max-w-6xl mx-auto px-4 py-2 text-[11px] font-semibold text-white/60">
-            One library for JVB, JVA and Varsity · Coaches add the drills, everyone browses
+            One library for JVB, JVA and Varsity · Coaches and drill builders add the drills, everyone browses
           </div>
         </div>
       </header>
@@ -889,14 +906,14 @@ export default function App() {
                   ? "Starting clean for Brophy. Coaches add the first drills here — each one gets a to-scale diagram, setup and coaching points."
                   : "Try a different keyword or category."}
               </p>
-              {drills.length === 0 && isCoach && (
+              {drills.length === 0 && canBuild && (
                 <button onClick={() => openForm(null)} className="mt-5 inline-flex items-center gap-2 text-sm font-bold px-5 py-3 rounded-full text-white min-h-12" style={{ backgroundColor: RED }}>
                   <Plus className="w-4 h-4" /> Add the first drill
                 </button>
               )}
-              {drills.length === 0 && !isCoach && (
+              {drills.length === 0 && !canBuild && (
                 <p className="mt-4 text-xs font-semibold text-slate-400">
-                  {user ? (roleChecked ? "Your account isn't a coach account, so you can't add drills." : "") : "Coaches — sign in above to add drills."}
+                  {user ? (roleChecked ? "Your account can't add drills — only coaches and drill builders can." : "") : "Coaches and drill builders — sign in above to add drills."}
                 </p>
               )}
             </div>
@@ -951,11 +968,12 @@ export default function App() {
       {view.name === "detail" && selected && (
         <DrillDetail
           drill={selected}
-          isCoach={isCoach}
+          canEdit={canBuild}
           onBack={backToLibrary}
           onEdit={() => openForm(selected)}
           onDuplicate={() => openForm({ ...selected, id: null, name: `${selected.name} (copy)` })}
           onDelete={() => handleDelete(selected.id)}
+          onPrint={() => setPrintDrill(selected)}
         />
       )}
       {view.name === "detail" && !selected && (
@@ -965,7 +983,7 @@ export default function App() {
         </div>
       )}
 
-      {view.name === "form" && isCoach && (
+      {view.name === "form" && canBuild && (
         <DrillForm
           initial={view.drill || null}
           user={user}
@@ -973,9 +991,9 @@ export default function App() {
           onSaved={handleSaved}
         />
       )}
-      {view.name === "form" && !isCoach && (
+      {view.name === "form" && !canBuild && (
         <div className="max-w-3xl mx-auto px-4 py-16 text-center">
-          <p className="text-slate-500 font-semibold">Only coaches can add or edit drills.</p>
+          <p className="text-slate-500 font-semibold">Only coaches and drill builders can add or edit drills.</p>
           <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Back to the library</button>
         </div>
       )}
@@ -988,5 +1006,8 @@ export default function App() {
         </p>
       </footer>
     </div>
+
+    {printDrill && <DrillPrintSheet drill={printDrill} onClose={() => setPrintDrill(null)} />}
+    </>
   );
 }

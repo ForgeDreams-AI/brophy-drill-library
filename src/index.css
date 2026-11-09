@@ -10,3 +10,46 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* ── printable drill sheet (DrillPrintSheet) ──────────────────────────────
+   The sheet is rendered as a sibling of .app-shell; in print the whole app
+   hides and only #print-sheet prints. Browsers don't print CSS backgrounds
+   by default, so the red category pill and step-number badges print as
+   bordered dark-red text instead of white-on-red — readable either way.
+   The diagram and each step never split across pages; a long how-to flows
+   to a second page instead of clipping. */
+@media print {
+  @page { size: letter; margin: 12mm; }
+  html, body { background: #fff !important; }
+  .app-shell { display: none !important; }
+  .print-overlay {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+  .print-overlay > div { padding: 0 !important; }
+  #print-sheet {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+  }
+  #print-sheet .sheet-cat,
+  #print-sheet .sheet-step-num {
+    background: transparent !important;
+    color: #980000 !important;
+    border: 1.5px solid #980000;
+  }
+  #print-sheet .sheet-diagram,
+  #print-sheet .sheet-step,
+  #print-sheet .sheet-keep,
+  #print-sheet .sheet-footer {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

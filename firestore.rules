@@ -16,9 +16,14 @@
 //
 // Model:
 //   - Anyone (signed in or not) can READ drillLibrary — the library is public.
-//   - Only coaches can WRITE: a user whose `users/{uid}` doc has
-//     role == "admin" or role == "orgAdmin" (the same roles the TeamHub app
-//     uses). Players can never add, edit or delete drills.
+//   - Only coaches and drill builders can WRITE: a user whose `users/{uid}`
+//     doc has role == "admin", "orgAdmin" or "drillBuilder". A drillBuilder
+//     builds drills in this library but has NO team-app access — their users
+//     doc carries no team assignment, and the TeamHub app's rules fail closed
+//     for them (no team membership → no team data). Players can never add,
+//     edit or delete drills.
+//   - The review queue stays COACH-ONLY: only admin/orgAdmin can approve
+//     (create the drill, then delete the suggestion) or dismiss.
 //   - `users` docs are readable by any signed-in user so the rule's get()
 //     works; they are never written from this site (the TeamHub app owns them).
 
@@ -32,14 +37,22 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'orgAdmin'];
     }
 
+    // Who can BUILD drills (create/edit/delete in drillLibrary): coaches
+    // plus the drillBuilder role — a library-only builder with no team
+    // assignment and no team-app access. NOT used for the review queue.
+    function canBuild() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'orgAdmin', 'drillBuilder'];
+    }
+
     // ── drill library ──────────────────────────────────────────────────────
     match /drillLibrary/{drillId} {
       allow read: if true;
-      allow create: if isCoach()
+      allow create: if canBuild()
         && request.resource.data.createdByUid == request.auth.uid
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0;
-      allow update, delete: if isCoach();
+      allow update, delete: if canBuild();
     }
 
     // ── drill suggestions (the review queue / limbo) ─────────────────────
