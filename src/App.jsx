@@ -276,7 +276,7 @@ function drillToForm(d) {
 
 function DrillForm({ initial, onCancel, onSaved, user }) {
   const [form, setForm] = useState(() => (initial ? drillToForm(initial) : BLANK_FORM));
-  const [boardOpen, setBoardOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(!initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const isEdit = Boolean(initial && initial.id);
@@ -343,6 +343,23 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
           <label className={labelCls} htmlFor="f-name">Drill name *</label>
           <input id="f-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Third-man break-out" className={inputCls} />
         </div>
+        {/* board */}
+        <div>
+          <span className={labelCls}>Diagram</span>
+          {form.diagramData ? (
+            <div className="relative">
+              <BoardSvg state={form.diagramData} showLegend className="w-full rounded-xl border border-slate-200" />
+              <button type="button" onClick={() => setForm({ ...form, diagramData: null })} className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/95 border border-slate-200 flex items-center justify-center shadow" aria-label="Remove diagram">
+                <X className="w-4 h-4 text-slate-600" />
+              </button>
+            </div>
+          ) : null}
+          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: RED }}>
+            <Layers className="w-4 h-4" /> {form.diagramData ? "Edit board" : "Build on the board"}
+          </button>
+          <p className="mt-1.5 text-xs text-slate-400">Place players, cones, goals and arrows on a to-scale pitch. Saving the board fills in the grid size below.</p>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={labelCls} htmlFor="f-cat">Category</label>
@@ -362,23 +379,6 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
             <label className={labelCls} htmlFor="f-players">Players</label>
             <input id="f-players" value={form.players} onChange={(e) => setForm({ ...form, players: e.target.value })} placeholder="e.g. 8 + 2 GKs" className={inputCls} />
           </div>
-        </div>
-
-        {/* board */}
-        <div>
-          <span className={labelCls}>Diagram</span>
-          {form.diagramData ? (
-            <div className="relative">
-              <BoardSvg state={form.diagramData} showLegend className="w-full rounded-xl border border-slate-200" />
-              <button type="button" onClick={() => setForm({ ...form, diagramData: null })} className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/95 border border-slate-200 flex items-center justify-center shadow" aria-label="Remove diagram">
-                <X className="w-4 h-4 text-slate-600" />
-              </button>
-            </div>
-          ) : null}
-          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: RED }}>
-            <Layers className="w-4 h-4" /> {form.diagramData ? "Edit board" : "Build on the board"}
-          </button>
-          <p className="mt-1.5 text-xs text-slate-400">Place players, cones, goals and arrows on a to-scale pitch. Saving the board fills in the grid size below.</p>
         </div>
 
         {/* setup */}
