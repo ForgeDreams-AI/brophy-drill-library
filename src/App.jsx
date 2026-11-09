@@ -4,16 +4,20 @@
 // Brophy Firebase project) can add, edit or delete drills. Drills live in
 // their own `drillLibrary` collection — never the TeamHub app's `drills`.
 // The library starts clean: zero drills seeded.
+// Review queue: coaches send videos from the Soccer Video Library with
+// ?add=1… — they land in `drillSuggestions` (limbo) until a coach approves
+// (quick-add form) or dismisses them. Duplicates are caught twice: at
+// suggest time and again in the queue, against the drills already live.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Search, Plus, LogIn, LogOut, X, Clock, Users, LayoutGrid,
   ChevronLeft, Pencil, Copy, Trash2, Play, Link2, BookOpen,
-  Layers, Check, AlertTriangle, WifiOff,
+  Layers, Check, AlertTriangle, WifiOff, Inbox,
 } from "lucide-react";
 import {
   collection, query, orderBy, onSnapshot, addDoc, updateDoc,
-  deleteDoc, doc, getDoc, serverTimestamp,
+  deleteDoc, doc, getDoc, getDocs, where, serverTimestamp,
 } from "firebase/firestore";
 import {
   onAuthStateChanged, signInWithPopup, GoogleAuthProvider,
@@ -109,6 +113,7 @@ function DrillCard({ drill, onOpen }) {
           {s.lengthYd && s.widthYd ? <span>{s.lengthYd} × {s.widthYd} yd</span> : null}
           {drill.dur ? <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{drill.dur} min</span> : null}
           {drill.players ? <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{drill.players}</span> : null}
+          {drill.videoUrl ? <span className="flex items-center gap-1"><Play className="w-3.5 h-3.5" />Video</span> : null}
         </div>
       </div>
     </button>
@@ -251,12 +256,51 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
   );
 }
 
+// ── incoming drill from the Soccer Video Library ───────────────────────────
+// The library links here as ?add=1&name=…&cat=…&videoUrl=…&coach=…&desc=…
+// so a coach can turn a saved video into a drill without retyping it.
+// cat must be one of the 15 drill categories; anything else (e.g. the video
+// library's "Technical" / "Unsorted") falls back to the form default and the
+// coach picks the category.
+function parseIncoming() {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("add") !== "1") return null;
+    const name = (q.get("name") || "").trim();
+    const videoUrl = (q.get("videoUrl") || "").trim();
+    if (!name || !videoUrl) return null;
+    const cat = (q.get("cat") || "").trim();
+    const coach = (q.get("coach") || "").trim();
+    const desc = (q.get("desc") || "").trim();
+    return {
+      name,
+      cat: DRILL_CATEGORIES.includes(cat) ? cat : "",
+      videoUrl,
+      desc,
+      info: coach ? `Source: @${coach} (Soccer Video Library)` : "Source: Soccer Video Library",
+      tags: ["video-library"],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearIncomingParams() {
+  try {
+    const u = new URL(window.location.href);
+    ["add", "name", "cat", "videoUrl", "coach", "desc"].forEach((k) => u.searchParams.delete(k));
+    window.history.replaceState({}, "", u.pathname + u.search);
+  } catch {}
+}
+
 // ── coach drill form (add / edit / duplicate) ──────────────────────────────
 const BLANK_FORM = {
   name: "", cat: DRILL_CATEGORIES[0], tags: "", dur: "", players: "",
-  setupLengthYd: "", setupWidthYd: "", setupCones: "", setupBalls: "",
-  setupGoals: "", setupMannequins: "", equipment: "",
+  setupGrid: "", equipment: "",
   howTo: "", objectives: "", desc: "", info: "", videoUrl: "", diagramData: null,
+  // Kept in state so editing an older drill never wipes its counts —
+  // they just aren't shown in the form anymore.
+  setupCones: "", setupBalls: "", setupGoals: "", setupMannequins: "",
 };
 
 function drillToForm(d) {
@@ -264,19 +308,25 @@ function drillToForm(d) {
   return {
     name: d.name || "", cat: d.cat || DRILL_CATEGORIES[0],
     tags: (d.tags || []).join(", "), dur: d.dur ?? "", players: d.players || "",
-    setupLengthYd: s.lengthYd ?? "", setupWidthYd: s.widthYd ?? "",
-    setupCones: s.cones ?? "", setupBalls: s.balls ?? "",
-    setupGoals: s.goals ?? "", setupMannequins: s.mannequins ?? "",
+    setupGrid: (s.lengthYd && s.widthYd) ? `${s.lengthYd} × ${s.widthYd}` : "",
     equipment: (s.equipment || []).join(", "),
     howTo: d.howTo || "", objectives: (d.objectives || []).join("\n"),
     desc: d.desc || "", info: d.info || "", videoUrl: d.videoUrl || "",
     diagramData: d.diagramData || null,
+    setupCones: s.cones ?? "", setupBalls: s.balls ?? "",
+    setupGoals: s.goals ?? "", setupMannequins: s.mannequins ?? "",
   };
+}
+
+// "30 × 20" (or "30x20", "30, 20") → [30, 20]. Anything else → [null, null].
+function parseGrid(text) {
+  const m = String(text || "").match(/(\d+)\s*[×x,\/ ]\s*(\d+)/);
+  return m ? [Number(m[1]), Number(m[2])] : [null, null];
 }
 
 function DrillForm({ initial, onCancel, onSaved, user }) {
   const [form, setForm] = useState(() => (initial ? drillToForm(initial) : BLANK_FORM));
-  const [boardOpen, setBoardOpen] = useState(!initial);
+  const [boardOpen, setBoardOpen] = useState(false); // diagram is optional — one tap away, never in the way
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const isEdit = Boolean(initial && initial.id);
@@ -285,6 +335,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
     if (!form.name.trim()) { setError("Give the drill a name."); return; }
     setSaving(true);
     setError("");
+    const [gridL, gridW] = parseGrid(form.setupGrid);
     const payload = {
       name: form.name.trim(),
       cat: form.cat,
@@ -292,8 +343,8 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
       dur: numOrNull(form.dur),
       players: form.players.trim(),
       setup: {
-        lengthYd: numOrNull(form.setupLengthYd),
-        widthYd: numOrNull(form.setupWidthYd),
+        lengthYd: gridL,
+        widthYd: gridW,
         cones: numOrNull(form.setupCones),
         balls: numOrNull(form.setupBalls),
         goals: numOrNull(form.setupGoals),
@@ -336,16 +387,54 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
         <ChevronLeft className="w-4 h-4" /> Cancel
       </button>
       <h1 className="mt-2 text-2xl font-black" style={{ color: RED }}>{isEdit ? "Edit drill" : "Add a drill"}</h1>
-      <p className="mt-1 text-sm text-slate-500">Only coaches can add drills. Build the diagram on the board, then fill in the setup — the board and the setup stay in sync.</p>
+      <p className="mt-1 text-sm text-slate-500">Name it, say how to run it, done. A diagram is optional — add one only if it helps.</p>
 
       <div className="mt-5 space-y-4 bg-white rounded-2xl border border-slate-200 p-4 sm:p-5">
         <div>
           <label className={labelCls} htmlFor="f-name">Drill name *</label>
           <input id="f-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Third-man break-out" className={inputCls} />
         </div>
-        {/* board */}
         <div>
-          <span className={labelCls}>Diagram</span>
+          <label className={labelCls} htmlFor="f-video">Video — the clip this drill came from</label>
+          <input id="f-video" value={form.videoUrl} onChange={(e) => setForm({ ...form, videoUrl: e.target.value })} placeholder="https://www.youtube.com/watch?v=… or an Instagram link" className={inputCls} />
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div>
+            <label className={labelCls} htmlFor="f-cat">Category</label>
+            <select id="f-cat" value={form.cat} onChange={(e) => setForm({ ...form, cat: e.target.value })} className={inputCls}>
+              {DRILL_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="f-players">Players</label>
+            <input id="f-players" value={form.players} onChange={(e) => setForm({ ...form, players: e.target.value })} placeholder="e.g. 8 + 2 GKs" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="f-dur">Minutes</label>
+            <input id="f-dur" type="number" min={1} value={form.dur} onChange={(e) => setForm({ ...form, dur: e.target.value })} placeholder="12" className={inputCls} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls} htmlFor="f-grid">Grid size (yd)</label>
+            <input id="f-grid" value={form.setupGrid} onChange={(e) => setForm({ ...form, setupGrid: e.target.value })} placeholder="30 × 20" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls} htmlFor="f-equip">Equipment</label>
+            <input id="f-equip" value={form.equipment} onChange={(e) => setForm({ ...form, equipment: e.target.value })} placeholder="bibs, cones, balls" className={inputCls} />
+          </div>
+        </div>
+
+        <div>
+          <label className={labelCls} htmlFor="f-howto">How to run it — one step per line</label>
+          <textarea id="f-howto" value={form.howTo} onChange={(e) => setForm({ ...form, howTo: e.target.value })} rows={3} placeholder={"Set the grid\nSplit into two teams\nPlay 3 minutes, then rotate"} className={inputCls} />
+        </div>
+
+        {/* diagram — optional, one tap away */}
+        <div>
+          <span className={labelCls}>Diagram (optional)</span>
           {form.diagramData ? (
             <div className="relative">
               <BoardSvg state={form.diagramData} showLegend className="w-full rounded-xl border border-slate-200" />
@@ -354,75 +443,32 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
               </button>
             </div>
           ) : null}
-          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: RED }}>
-            <Layers className="w-4 h-4" /> {form.diagramData ? "Edit board" : "Build on the board"}
+          <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold bg-slate-100 text-slate-700 flex items-center justify-center gap-2 min-h-12">
+            <Layers className="w-4 h-4" /> {form.diagramData ? "Edit diagram" : "Add a diagram"}
           </button>
-          <p className="mt-1.5 text-xs text-slate-400">Place players, cones, goals and arrows on a to-scale pitch. Saving the board fills in the grid size below.</p>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={labelCls} htmlFor="f-cat">Category</label>
-            <select id="f-cat" value={form.cat} onChange={(e) => setForm({ ...form, cat: e.target.value })} className={inputCls}>
-              {DRILL_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+        <details className="rounded-xl border border-slate-200 px-3 py-2.5">
+          <summary className="text-sm font-bold text-slate-600 cursor-pointer">More details (optional)</summary>
+          <div className="mt-3 space-y-4">
+            <div>
+              <label className={labelCls} htmlFor="f-tags">Tags (comma separated)</label>
+              <input id="f-tags" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="rondo, 1v1" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="f-desc">Description</label>
+              <textarea id="f-desc" value={form.desc} onChange={(e) => setForm({ ...form, desc: e.target.value })} rows={2} placeholder="One or two lines on what the drill is for" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="f-obj">Look for — one goal per line</label>
+              <textarea id="f-obj" value={form.objectives} onChange={(e) => setForm({ ...form, objectives: e.target.value })} rows={3} placeholder={"Third-man runs\nQuick combination play"} className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="f-info">Coaching points</label>
+              <textarea id="f-info" value={form.info} onChange={(e) => setForm({ ...form, info: e.target.value })} rows={3} placeholder="What to say, what to correct, when to stop and coach" className={inputCls} />
+            </div>
           </div>
-          <div>
-            <label className={labelCls} htmlFor="f-tags">Tags (comma separated)</label>
-            <input id="f-tags" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="rondo, 1v1" className={inputCls} />
-          </div>
-          <div>
-            <label className={labelCls} htmlFor="f-dur">Duration (minutes)</label>
-            <input id="f-dur" type="number" min={1} value={form.dur} onChange={(e) => setForm({ ...form, dur: e.target.value })} placeholder="12" className={inputCls} />
-          </div>
-          <div>
-            <label className={labelCls} htmlFor="f-players">Players</label>
-            <input id="f-players" value={form.players} onChange={(e) => setForm({ ...form, players: e.target.value })} placeholder="e.g. 8 + 2 GKs" className={inputCls} />
-          </div>
-        </div>
-
-        {/* setup */}
-        <div>
-          <span className={labelCls}>Setup</span>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-xs font-semibold text-slate-600">Grid length (yd)
-              <input type="number" min={5} value={form.setupLengthYd} onChange={(e) => setForm({ ...form, setupLengthYd: e.target.value })} placeholder="30" className={`${inputCls} mt-0.5 text-center`} />
-            </label>
-            <label className="text-xs font-semibold text-slate-600">Grid width (yd)
-              <input type="number" min={5} value={form.setupWidthYd} onChange={(e) => setForm({ ...form, setupWidthYd: e.target.value })} placeholder="20" className={`${inputCls} mt-0.5 text-center`} />
-            </label>
-          </div>
-          <div className="grid grid-cols-4 gap-2 mt-3">
-            <label className="text-xs font-semibold text-slate-600">Cones<input type="number" min={0} value={form.setupCones} onChange={(e) => setForm({ ...form, setupCones: e.target.value })} placeholder="0" className={`${inputCls} mt-0.5 text-center`} /></label>
-            <label className="text-xs font-semibold text-slate-600">Balls<input type="number" min={0} value={form.setupBalls} onChange={(e) => setForm({ ...form, setupBalls: e.target.value })} placeholder="0" className={`${inputCls} mt-0.5 text-center`} /></label>
-            <label className="text-xs font-semibold text-slate-600">Goals<input type="number" min={0} value={form.setupGoals} onChange={(e) => setForm({ ...form, setupGoals: e.target.value })} placeholder="0" className={`${inputCls} mt-0.5 text-center`} /></label>
-            <label className="text-xs font-semibold text-slate-600">Mannequins<input type="number" min={0} value={form.setupMannequins} onChange={(e) => setForm({ ...form, setupMannequins: e.target.value })} placeholder="0" className={`${inputCls} mt-0.5 text-center`} /></label>
-          </div>
-          <label className="block text-xs font-semibold text-slate-600 mt-3">Equipment (comma separated)
-            <input value={form.equipment} onChange={(e) => setForm({ ...form, equipment: e.target.value })} placeholder="bibs, poles, hurdles" className={`${inputCls} mt-0.5`} />
-          </label>
-        </div>
-
-        <div>
-          <label className={labelCls} htmlFor="f-desc">Description</label>
-          <textarea id="f-desc" value={form.desc} onChange={(e) => setForm({ ...form, desc: e.target.value })} rows={2} placeholder="One or two lines on what the drill is for" className={inputCls} />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="f-howto">How to run it — one step per line</label>
-          <textarea id="f-howto" value={form.howTo} onChange={(e) => setForm({ ...form, howTo: e.target.value })} rows={4} placeholder={"Set the grid\nSplit into two teams\nPlay 3 minutes, then rotate"} className={inputCls} />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="f-obj">Look for — one goal per line</label>
-          <textarea id="f-obj" value={form.objectives} onChange={(e) => setForm({ ...form, objectives: e.target.value })} rows={3} placeholder={"Third-man runs\nQuick combination play"} className={inputCls} />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="f-info">Coaching points</label>
-          <textarea id="f-info" value={form.info} onChange={(e) => setForm({ ...form, info: e.target.value })} rows={3} placeholder="What to say, what to correct, when to stop and coach" className={inputCls} />
-        </div>
-        <div>
-          <label className={labelCls} htmlFor="f-video">Video URL (optional)</label>
-          <input id="f-video" value={form.videoUrl} onChange={(e) => setForm({ ...form, videoUrl: e.target.value })} placeholder="https://www.youtube.com/watch?v=…" className={inputCls} />
-        </div>
+        </details>
 
         {error ? <p className="flex items-start gap-2 text-sm font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5"><AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />{error}</p> : null}
 
@@ -438,7 +484,11 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
         <TacticsBoard
           initial={form.diagramData}
           onSave={(_blob, state) => {
-            setForm((p) => ({ ...p, diagramData: state, setupLengthYd: state?.lengthYd ?? p.setupLengthYd, setupWidthYd: state?.widthYd ?? p.setupWidthYd }));
+            setForm((p) => ({
+              ...p,
+              diagramData: state,
+              setupGrid: state?.lengthYd && state?.widthYd ? `${state.lengthYd} × ${state.widthYd}` : p.setupGrid,
+            }));
             setBoardOpen(false);
           }}
           onClose={() => setBoardOpen(false)}
@@ -490,6 +540,41 @@ function SignInModal({ onClose }) {
   );
 }
 
+// ── review queue row ─────────────────────────────────────────────────────────
+function SuggestionRow({ s, alreadyAdded, onApprove, onDismiss }) {
+  const [confirming, setConfirming] = useState(false);
+  const when = s.createdAt?.toDate ? s.createdAt.toDate().toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>{s.cat || "Unsorted"}</span>
+          <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: RED }}>{s.name}</h3>
+          <p className="mt-1 text-xs font-semibold text-slate-400">
+            Suggested by {s.suggestedByName || "a coach"}{when ? ` · ${when}` : ""}
+          </p>
+        </div>
+        {alreadyAdded && (
+          <span className="flex-shrink-0 text-[11px] font-black px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Already in the library</span>
+        )}
+      </div>
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        <a href={s.videoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-slate-100 text-slate-700 min-h-11">
+          <Play className="w-3.5 h-3.5" /> Watch video
+        </a>
+        {!alreadyAdded && (
+          <button onClick={onApprove} className="text-xs font-bold px-4 py-2.5 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Add to library</button>
+        )}
+        {confirming ? (
+          <button onClick={onDismiss} className="text-xs font-bold px-4 py-2.5 rounded-full bg-red-50 text-red-700 border border-red-200 min-h-11">Sure? Dismiss it</button>
+        ) : (
+          <button onClick={() => setConfirming(true)} className="text-xs font-bold px-4 py-2.5 rounded-full bg-white border border-slate-200 text-slate-600 min-h-11">Dismiss</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── app ────────────────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -500,12 +585,47 @@ export default function App() {
   const [offline, setOffline] = useState(false);
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("All");
-  const [view, setView] = useState({ name: "library" }); // library | detail | form
+  const [view, setView] = useState({ name: "library" }); // library | detail | form | inbox
   const [signInOpen, setSignInOpen] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [incoming, setIncoming] = useState(() => parseIncoming());
+  const [incomingStatus, setIncomingStatus] = useState(null); // saved | queued | already | error
+  const [suggestions, setSuggestions] = useState([]);
   const timeoutRef = useRef(null);
 
   const isCoach = role === "admin" || role === "orgAdmin";
+
+  // Incoming video-library pick → the review queue (limbo). Any signed-in
+  // user can suggest; only coaches see the queue and approve. Runs once the
+  // user and the drill list are known so the already-added check is real.
+  // Params stay in the URL until the user signs in.
+  useEffect(() => {
+    if (!incoming || loading || !user) return;
+    const inc = incoming;
+    setIncoming(null);
+    clearIncomingParams();
+    (async () => {
+      try {
+        if (drills.some((d) => d.videoUrl && d.videoUrl === inc.videoUrl)) {
+          setIncomingStatus("already");
+          return;
+        }
+        const dup = await getDocs(query(collection(db, "drillSuggestions"), where("videoUrl", "==", inc.videoUrl)));
+        if (!dup.empty) { setIncomingStatus("queued"); return; }
+        await addDoc(collection(db, "drillSuggestions"), {
+          ...inc,
+          suggestedByUid: user.uid,
+          suggestedByName: user.displayName || user.email || "Coach",
+          createdAt: serverTimestamp(),
+        });
+        setIncomingStatus("saved");
+      } catch {
+        setIncomingStatus("error");
+      }
+    })();
+    // drills intentionally left out: first load only, gated on loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming, loading, user]);
 
   // Auth + role (role lives on the users doc the TeamHub app manages).
   useEffect(() => onAuthStateChanged(auth, async (u) => {
@@ -540,6 +660,17 @@ export default function App() {
     return () => { unsub(); clearTimeout(timeoutRef.current); };
   }, []);
 
+  // Live review queue — coaches only.
+  useEffect(() => {
+    if (!isCoach || !user) { setSuggestions([]); return; }
+    const unsub = onSnapshot(
+      query(collection(db, "drillSuggestions"), orderBy("createdAt", "desc")),
+      (snap) => setSuggestions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => {},
+    );
+    return () => unsub();
+  }, [isCoach, user]);
+
   const counts = useMemo(() => {
     const c = { All: drills.length };
     for (const d of drills) c[d.cat] = (c[d.cat] || 0) + 1;
@@ -567,7 +698,25 @@ export default function App() {
     catch { setSaveMsg("Could not delete the drill — check your connection."); }
   };
 
-  const handleSaved = (id) => {
+  // Approve a suggestion: opens the quick-add form prefilled. Saving the
+  // drill clears the suggestion from the queue. Cancelling leaves it there.
+  const approveSuggestion = (s) => {
+    setView({
+      name: "form",
+      drill: { name: s.name, cat: s.cat, videoUrl: s.videoUrl, desc: s.desc || "", info: s.info || "", tags: s.tags || [] },
+      suggestionId: s.id,
+    });
+    window.scrollTo(0, 0);
+  };
+  const dismissSuggestion = async (id) => {
+    try { await deleteDoc(doc(db, "drillSuggestions", id)); }
+    catch { setSaveMsg("Could not dismiss that one — check your connection."); }
+  };
+
+  const handleSaved = async (id) => {
+    if (view.suggestionId) {
+      try { await deleteDoc(doc(db, "drillSuggestions", view.suggestionId)); } catch {}
+    }
     setSaveMsg("Drill saved.");
     setTimeout(() => setSaveMsg(""), 4000);
     openDetail(id);
@@ -591,6 +740,14 @@ export default function App() {
                 <Plus className="w-4 h-4" /> <span className="hidden sm:inline">Add drill</span><span className="sm:hidden">Add</span>
               </button>
             )}
+            {isCoach && (
+              <button onClick={() => setView({ name: "inbox" })} className="relative flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white/10 min-h-11">
+                <Inbox className="w-4 h-4" /> <span className="hidden sm:inline">Review</span>
+                {suggestions.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-white text-[11px] font-black flex items-center justify-center" style={{ color: RED }}>{suggestions.length}</span>
+                )}
+              </button>
+            )}
             {user ? (
               <button onClick={() => signOut(auth)} title={user.email || ""} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white/10 min-h-11">
                 <LogOut className="w-4 h-4" /> <span className="hidden sm:inline">{user.displayName?.split(" ")[0] || "Coach"}</span>
@@ -612,6 +769,32 @@ export default function App() {
       {saveMsg && (
         <div className="max-w-6xl mx-auto px-4 mt-3">
           <p className="flex items-center gap-2 text-sm font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5"><Check className="w-4 h-4" />{saveMsg}</p>
+        </div>
+      )}
+
+      {incoming && !user && view.name === "library" && (
+        <div className="max-w-6xl mx-auto px-4 mt-3">
+          <div className="flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-800 bg-white border border-slate-200 rounded-xl px-3 py-2.5 shadow-sm">
+            <Plus className="w-4 h-4 flex-shrink-0" style={{ color: RED }} />
+            <span className="min-w-0 flex-1">Video to suggest: <span className="font-black">{incoming.name}</span>{incoming.cat ? ` · ${incoming.cat}` : ""}</span>
+            <button onClick={() => setSignInOpen(true)} className="text-xs font-bold px-4 py-2.5 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Sign in to send it</button>
+          </div>
+          <p className="mt-2 text-xs font-semibold text-slate-400 px-1">Sent from the Soccer Video Library. It lands in the review queue — Anthony checks it before it goes in the library.</p>
+        </div>
+      )}
+
+      {incomingStatus && (
+        <div className="max-w-6xl mx-auto px-4 mt-3">
+          <p className={`flex items-center gap-2 text-sm font-semibold rounded-xl px-3 py-2.5 border ${incomingStatus === "error" ? "text-red-700 bg-red-50 border-red-200" : "text-emerald-700 bg-emerald-50 border-emerald-200"}`}>
+            <Check className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1">
+              {incomingStatus === "saved" && "Sent to the review queue — Anthony will check it before it goes in the library."}
+              {incomingStatus === "queued" && "That video is already in the review queue."}
+              {incomingStatus === "already" && "That drill is already in the library — no need to add it again."}
+              {incomingStatus === "error" && "Couldn't send that — check your connection and try again."}
+            </span>
+            <button onClick={() => setIncomingStatus(null)} aria-label="Dismiss" className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"><X className="w-4 h-4" /></button>
+          </p>
         </div>
       )}
 
@@ -692,6 +875,41 @@ export default function App() {
             </>
           )}
         </main>
+      )}
+
+      {view.name === "inbox" && isCoach && (
+        <main className="max-w-3xl mx-auto px-4 pb-16">
+          <button onClick={backToLibrary} className="mt-4 flex items-center gap-1 text-sm font-bold text-slate-600 hover:text-slate-900 min-h-11">
+            <ChevronLeft className="w-4 h-4" /> All drills
+          </button>
+          <h1 className="mt-2 text-2xl font-black" style={{ color: RED }}>Review queue</h1>
+          <p className="mt-1 text-sm text-slate-500">Videos coaches sent from the Soccer Video Library. Add the ones worth keeping — each opens as a quick fill-in. Dismiss the rest, or the ones already in the library.</p>
+          {suggestions.length === 0 ? (
+            <div className="mt-6 bg-white rounded-3xl border border-dashed border-slate-300 px-6 py-12 text-center">
+              <Inbox className="w-8 h-8 mx-auto text-slate-300" />
+              <p className="mt-3 text-sm font-bold text-slate-500">Nothing waiting — the queue is clear.</p>
+              <p className="mt-1 text-xs text-slate-400">When a coach taps “Add to Brophy Library” in the video library, it shows up here.</p>
+            </div>
+          ) : (
+            <div className="mt-5 space-y-3">
+              {suggestions.map((s) => (
+                <SuggestionRow
+                  key={s.id}
+                  s={s}
+                  alreadyAdded={drills.some((d) => d.videoUrl && d.videoUrl === s.videoUrl)}
+                  onApprove={() => approveSuggestion(s)}
+                  onDismiss={() => dismissSuggestion(s.id)}
+                />
+              ))}
+            </div>
+          )}
+        </main>
+      )}
+      {view.name === "inbox" && !isCoach && (
+        <div className="max-w-3xl mx-auto px-4 py-16 text-center">
+          <p className="text-slate-500 font-semibold">Only coaches can review suggestions.</p>
+          <button onClick={backToLibrary} className="mt-4 text-sm font-bold px-4 py-3 rounded-full text-white min-h-11" style={{ backgroundColor: RED }}>Back to the library</button>
+        </div>
       )}
 
       {view.name === "detail" && selected && (
