@@ -1,9 +1,15 @@
 // ─── Brophy Drill Library ──────────────────────────────────────────────────
 // Standalone reference library for Brophy College Prep soccer. Public to
 // browse (no sign-in needed); only coaches (role admin / orgAdmin in the
-// Brophy Firebase project) can add, edit or delete drills. Drills live in
-// their own `drillLibrary` collection — never the TeamHub app's `drills`.
-// The library starts clean: zero drills seeded.
+// Brophy Firebase project) can add, edit or delete drills.
+//
+// ONE shared library: drills live in the `drillLibrary` collection, which
+// the TeamHub app (brophy-soccer-app) reads and writes too — a drill made
+// in either app shows up in both. The shared document shape is defined in
+// src/lib/drillDoc.js (normalizeDrillDoc / drillDocToForm /
+// formToDrillPayload); the review queue below still approves into the same
+// collection. The old `drills` collection is dead — its real drills were
+// copied here by work/migrate-drills-to-canonical.js.
 // Review queue: coaches send videos from the Soccer Video Library with
 // ?add=1… — they land in `drillSuggestions` (limbo) until a coach approves
 // (quick-add form) or dismisses them. Duplicates are caught twice: at
@@ -25,6 +31,7 @@ import {
 } from "firebase/auth";
 import { auth, db } from "./firebase";
 import { DRILL_CATEGORIES } from "./data/categories";
+import { normalizeDrillDoc, drillDocToForm, formToDrillPayload, DRILL_KIND } from "./lib/drillDoc";
 import TacticsBoard, { BoardSvg } from "./components/TacticsBoard";
 import { ARROW_LEGEND, wavyPath } from "./components/boardData";
 
@@ -55,11 +62,6 @@ function youTubeEmbed(url) {
   return null;
 }
 
-const numOrNull = (v) => {
-  const n = Number(v);
-  return v === "" || v === null || v === undefined || Number.isNaN(n) ? null : n;
-};
-
 // ── the fixed 5-arrow legend, as chips (same legend as the board) ──────────
 function LegendChips() {
   return (
@@ -86,7 +88,7 @@ function LegendChips() {
 }
 
 // ── drill card (library grid) ──────────────────────────────────────────────
-function DrillCard({ drill, onOpen }) {
+export function DrillCard({ drill, onOpen }) {
   const s = drill.setup || {};
   const [imgOk, setImgOk] = useState(true);
   return (
@@ -99,6 +101,8 @@ function DrillCard({ drill, onOpen }) {
           ? <img src={drill.diagramImage} alt="" className="w-full h-full object-cover" onError={() => setImgOk(false)} />
           : drill.diagramData
           ? <BoardSvg state={drill.diagramData} className="w-full h-full" />
+          : drill.diagram
+          ? <img src={drill.diagram} alt="" className="w-full h-full object-cover" loading="lazy" />
           : (
             <div className="flex flex-col items-center gap-2 text-slate-300 px-4">
               <LayoutGrid className="w-10 h-10" />
@@ -110,7 +114,7 @@ function DrillCard({ drill, onOpen }) {
         <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>
           {drill.cat}
         </span>
-        <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: RED }}>{drill.name}</h3>
+        <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: RED }}>{drill.title || drill.name}</h3>
         {drill.desc ? <p className="mt-1 text-sm text-slate-500 line-clamp-2">{drill.desc}</p> : null}
         <div className="mt-3 flex items-center gap-3 text-xs font-semibold text-slate-500 flex-wrap">
           {s.lengthYd && s.widthYd ? <span>{s.lengthYd} × {s.widthYd} yd</span> : null}
@@ -124,7 +128,7 @@ function DrillCard({ drill, onOpen }) {
 }
 
 // ── drill detail ───────────────────────────────────────────────────────────
-function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) {
+export function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) {
   const s = drill.setup || {};
   const embed = youTubeEmbed(drill.videoUrl);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -150,7 +154,7 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
           <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>
             {drill.cat}
           </span>
-          <h1 className="mt-2 text-2xl sm:text-3xl font-black leading-tight" style={{ color: RED }}>{drill.name}</h1>
+          <h1 className="mt-2 text-2xl sm:text-3xl font-black leading-tight" style={{ color: RED }}>{drill.title || drill.name}</h1>
           {drill.desc ? <p className="mt-2 text-slate-600 leading-relaxed">{drill.desc}</p> : null}
         </div>
         {isCoach && (
@@ -171,7 +175,8 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
         )}
       </div>
 
-      {/* diagram — photo from the video wins over a hand-drawn one */}
+      {/* diagram — photo from the video wins over a hand-drawn one, then
+          the raster PNG the team app exports, then nothing */}
       {drill.diagramImage && imgOk ? (
         <div className="mt-5 bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <img src={drill.diagramImage} alt="Diagram" className="w-full" onError={() => setImgOk(false)} />
@@ -181,11 +186,27 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
           <BoardSvg state={drill.diagramData} showLegend className="w-full" />
           <div className="px-4 py-3 border-t border-slate-100"><LegendChips /></div>
         </div>
+      ) : drill.diagram ? (
+        <div className="mt-5 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <img src={drill.diagram} alt="Diagram" className="w-full" loading="lazy" />
+        </div>
       ) : (
         <div className="mt-5 bg-white rounded-2xl border border-dashed border-slate-300 py-10 flex flex-col items-center gap-2 text-slate-400">
           <LayoutGrid className="w-8 h-8" />
           <span className="text-sm font-semibold">No diagram for this drill yet</span>
         </div>
+      )}
+
+      {/* photos (team app uploads) */}
+      {drill.photos && drill.photos.length > 0 && (
+        <section className="mt-6">
+          <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Photos</h2>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+            {drill.photos.map((src, i) => (
+              <img key={i} src={src} alt="" className="w-32 h-32 rounded-xl object-cover border border-slate-200 flex-shrink-0" loading="lazy" />
+            ))}
+          </div>
+        </section>
       )}
 
       {/* setup */}
@@ -233,6 +254,24 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
         </section>
       )}
 
+      {/* scenario + cues (team app fields) */}
+      {drill.scenario ? (
+        <section className="mt-6">
+          <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Scenario</h2>
+          <p className="mt-2 text-sm text-slate-700 leading-relaxed whitespace-pre-line bg-white rounded-xl border border-slate-200 px-4 py-3">{drill.scenario}</p>
+        </section>
+      ) : null}
+      {drill.cues && drill.cues.length > 0 && (
+        <section className="mt-6">
+          <h2 className="text-sm font-black uppercase tracking-wider text-slate-500">Cues</h2>
+          <ul className="mt-2 space-y-1.5">
+            {drill.cues.map((c, i) => (
+              <li key={i} className="flex gap-2 text-sm text-slate-700"><Check className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: ACCENT }} />{c}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* coaching points */}
       {drill.info ? (
         <section className="mt-6">
@@ -267,7 +306,7 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
 // ── incoming drill from the Soccer Video Library ───────────────────────────
 // The library links here as ?add=1&name=…&cat=…&videoUrl=…&coach=…&desc=…&diagram=…
 // so a coach can turn a saved video into a drill without retyping it.
-// cat must be one of the 15 drill categories; anything else (e.g. the video
+// cat must be one of the 17 drill categories; anything else (e.g. the video
 // library's "Technical" / "Unsorted") falls back to the form default and the
 // coach picks the category. diagram is the video's setup still — it becomes
 // the drill's diagram photo, so nobody has to hand-draw the diagram.
@@ -306,41 +345,14 @@ function clearIncomingParams() {
 }
 
 // ── coach drill form (add / edit / duplicate) ──────────────────────────────
-const BLANK_FORM = {
-  name: "", cat: DRILL_CATEGORIES[0], tags: "", dur: "", players: "",
-  setupGrid: "", equipment: "",
-  howTo: "", objectives: "", desc: "", info: "", videoUrl: "", diagramData: null,
-  diagramImage: "",
-  // Kept in state so editing an older drill never wipes its counts —
-  // they just aren't shown in the form anymore.
-  setupCones: "", setupBalls: "", setupGoals: "", setupMannequins: "",
-};
+// Blank form = an empty doc run through the shared mapping, so its shape
+// can never drift from drillDocToForm.
+const BLANK_FORM = drillDocToForm(null);
 
-function drillToForm(d) {
-  const s = d.setup || {};
-  return {
-    name: d.name || "", cat: d.cat || DRILL_CATEGORIES[0],
-    tags: (d.tags || []).join(", "), dur: d.dur ?? "", players: d.players || "",
-    setupGrid: (s.lengthYd && s.widthYd) ? `${s.lengthYd} × ${s.widthYd}` : "",
-    equipment: (s.equipment || []).join(", "),
-    howTo: d.howTo || "", objectives: (d.objectives || []).join("\n"),
-    desc: d.desc || "", info: d.info || "", videoUrl: d.videoUrl || "",
-    diagramData: d.diagramData || null,
-    diagramImage: d.diagramImage || "",
-    setupCones: s.cones ?? "", setupBalls: s.balls ?? "",
-    setupGoals: s.goals ?? "", setupMannequins: s.mannequins ?? "",
-  };
-}
-
-// "30 × 20" (or "30x20", "30, 20") → [30, 20]. Anything else → [null, null].
-function parseGrid(text) {
-  const m = String(text || "").match(/(\d+)\s*[×x,\/ ]\s*(\d+)/);
-  return m ? [Number(m[1]), Number(m[2])] : [null, null];
-}
-
-function DrillForm({ initial, onCancel, onSaved, user }) {
-  const [form, setForm] = useState(() => (initial ? drillToForm(initial) : BLANK_FORM));
+export function DrillForm({ initial, onCancel, onSaved, user }) {
+  const [form, setForm] = useState(() => (initial ? drillDocToForm(initial) : BLANK_FORM));
   const [boardOpen, setBoardOpen] = useState(false); // diagram is optional — one tap away, never in the way
+  const [newCat, setNewCat] = useState(false); // coach is typing a brand-new category
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const isEdit = Boolean(initial && initial.id);
@@ -349,29 +361,8 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
     if (!form.name.trim()) { setError("Give the drill a name."); return; }
     setSaving(true);
     setError("");
-    const [gridL, gridW] = parseGrid(form.setupGrid);
     const payload = {
-      name: form.name.trim(),
-      cat: form.cat,
-      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      dur: numOrNull(form.dur),
-      players: form.players.trim(),
-      setup: {
-        lengthYd: gridL,
-        widthYd: gridW,
-        cones: numOrNull(form.setupCones),
-        balls: numOrNull(form.setupBalls),
-        goals: numOrNull(form.setupGoals),
-        mannequins: numOrNull(form.setupMannequins),
-        equipment: form.equipment.split(",").map((t) => t.trim()).filter(Boolean),
-      },
-      diagramData: form.diagramData || null,
-      diagramImage: form.diagramImage.trim() || null,
-      howTo: form.howTo.trim(),
-      objectives: lines(form.objectives),
-      desc: form.desc.trim(),
-      info: form.info.trim(),
-      videoUrl: form.videoUrl.trim(),
+      ...formToDrillPayload(form),
       updatedAt: serverTimestamp(),
     };
     try {
@@ -417,9 +408,17 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <div>
             <label className={labelCls} htmlFor="f-cat">Category</label>
-            <select id="f-cat" value={form.cat} onChange={(e) => setForm({ ...form, cat: e.target.value })} className={inputCls}>
-              {DRILL_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            {newCat ? (
+              <div className="flex gap-1">
+                <input autoFocus value={form.cat} onChange={(e) => setForm({ ...form, cat: e.target.value })} placeholder="New category" className={`${inputCls} flex-1 min-w-0`} />
+                <button type="button" onClick={() => { setNewCat(false); setForm({ ...form, cat: DRILL_CATEGORIES[0] }); }} className="px-2 rounded-xl bg-slate-100 text-slate-500" title="Back to list"><X className="w-4 h-4" /></button>
+              </div>
+            ) : (
+              <select id="f-cat" value={form.cat} onChange={(e) => { if (e.target.value === "__new__") { setNewCat(true); setForm({ ...form, cat: "" }); } else setForm({ ...form, cat: e.target.value }); }} className={inputCls}>
+                {DRILL_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value="__new__">＋ Add new category…</option>
+              </select>
+            )}
           </div>
           <div>
             <label className={labelCls} htmlFor="f-players">Players</label>
@@ -678,7 +677,7 @@ export default function App() {
       query(collection(db, "drillLibrary"), orderBy("createdAt", "desc")),
       (snap) => {
         clearTimeout(timeoutRef.current);
-        setDrills(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setDrills(snap.docs.map((d) => normalizeDrillDoc({ id: d.id, ...d.data() })));
         setLoading(false);
         setOffline(false);
       },
@@ -698,6 +697,15 @@ export default function App() {
     return () => unsub();
   }, [isCoach, user]);
 
+  // Filter pills = the 17 built-in categories + any custom category a coach
+  // added on a drill (same as the TeamHub app), so a new category shows up
+  // to filter by as soon as a drill uses it.
+  const cats = useMemo(() => {
+    const set = new Set(DRILL_CATEGORIES);
+    drills.forEach((d) => d.cat && set.add(d.cat));
+    return [...set];
+  }, [drills]);
+
   const counts = useMemo(() => {
     const c = { All: drills.length };
     for (const d of drills) c[d.cat] = (c[d.cat] || 0) + 1;
@@ -707,9 +715,10 @@ export default function App() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return drills.filter((d) => {
+      if (d.kind && d.kind !== DRILL_KIND) return false; // legacy "point" items are not drills
       if (cat !== "All" && d.cat !== cat) return false;
       if (!q) return true;
-      const hay = [d.name, d.cat, d.desc, d.howTo, ...(d.tags || [])].join(" ").toLowerCase();
+      const hay = [d.name, d.title, d.cat, d.desc, d.howTo, ...(d.tags || [])].join(" ").toLowerCase();
       return hay.includes(q);
     });
   }, [drills, cat, search]);
@@ -849,7 +858,7 @@ export default function App() {
               />
             </div>
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap">
-              {["All", ...DRILL_CATEGORIES].map((c) => (
+              {["All", ...cats].map((c) => (
                 <button
                   key={c}
                   onClick={() => setCat(c)}

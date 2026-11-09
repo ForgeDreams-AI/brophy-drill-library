@@ -5,6 +5,15 @@
 // rather than deploying this file on its own (it would overwrite the app's
 // rules).
 //
+// ONE shared drill library (unified 2026-11-09): the team app and this
+// Drill Library site BOTH read and write `drillLibrary`. A drill made in
+// either app shows up in both. The old `drills` collection is no longer
+// read or written by either app (its real drills were migrated into
+// `drillLibrary`; kind === "point" coaching-point items were skipped and
+// stay in `drills`, unread). The shared document shape is documented in
+// src/lib/drillDoc.js (same comment in the team app at
+// teamhub/src/lib/drillDoc.js).
+//
 // Model:
 //   - Anyone (signed in or not) can READ drillLibrary — the library is public.
 //   - Only coaches can WRITE: a user whose `users/{uid}` doc has
