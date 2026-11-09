@@ -28,6 +28,23 @@ const rid = () => Math.random().toString(36).slice(2, 9);
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const ARROW_WHITE = "#FFFFFF"; // white arrows on the green pitch
 
+// Number badge on an arrow: a dark disc with a white ring and a bold white
+// number, centred on the arrow's midpoint. Numbers run in draw order
+// (1 = first line drawn), so the sequence of a drill reads off the board
+// and renumbers itself when a line is deleted. The disc sits on top of the
+// white line so it reads on the green pitch and on the line itself, and it
+// is part of the SVG so it exports with the PNG.
+const ARROW_NUM_R = 14;
+function ArrowNumber({ x1, y1, x2, y2, n, onPointerDown }) {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  return (
+    <g>
+      <circle cx={mx} cy={my} r={ARROW_NUM_R} fill="#0F172A" stroke="#FFFFFF" strokeWidth={2} onPointerDown={onPointerDown} style={onPointerDown ? { cursor: "pointer" } : undefined} />
+      <text x={mx} y={my + 5.5} textAnchor="middle" fontSize={16} fontWeight="800" fill="#FFFFFF" style={{ pointerEvents: "none" }}>{n}</text>
+    </g>
+  );
+}
+
 // White line style shared by all field markings.
 const L = { fill: "none", stroke: "rgba(255,255,255,0.85)", strokeWidth: 3 };
 
@@ -164,22 +181,32 @@ export function BoardSvg({ state, className = "", showLegend = false }) {
           ? <circle key={z.id} cx={px(z.x)} cy={py(z.y)} r={z.r * (VB_W - 2 * M)} fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.7)" strokeWidth={2} strokeDasharray="8 6" />
           : <rect key={z.id} x={px(z.x)} y={py(z.y)} width={z.w * (VB_W - 2 * M)} height={z.h * (pitchH - 2 * M)} fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.7)" strokeWidth={2} strokeDasharray="8 6" rx={6} />
       ))}
-      {s.arrows.map((a) => {
+      {s.arrows.map((a, i) => {
         const p = { x1: px(a.from.x), y1: py(a.from.y), x2: px(a.to.x), y2: py(a.to.y) };
-        if (a.kind === "dribble") return <path key={a.id} d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#bs-head)" />;
+        const num = <ArrowNumber {...p} n={i + 1} />;
+        if (a.kind === "dribble") return (
+          <g key={a.id}>
+            <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#bs-head)" />
+            {num}
+          </g>
+        );
         if (a.kind === "shot") {
           const dx = p.x2 - p.x1, dy = p.y2 - p.y1, len = Math.hypot(dx, dy) || 1, ox = (-dy / len) * 4, oy = (dx / len) * 4;
           return (
             <g key={a.id}>
               <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" />
               <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#bs-head)" />
+              {num}
             </g>
           );
         }
         return (
-          <line key={a.id} {...p} stroke={ARROW_WHITE} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
-            strokeDasharray={a.kind === "run" ? "10 7" : undefined}
-            markerEnd={a.kind === "pass" ? "url(#bs-open)" : "url(#bs-head)"} />
+          <g key={a.id}>
+            <line {...p} stroke={ARROW_WHITE} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
+              strokeDasharray={a.kind === "run" ? "10 7" : undefined}
+              markerEnd={a.kind === "pass" ? "url(#bs-open)" : "url(#bs-head)"} />
+            {num}
+          </g>
         );
       })}
       {s.tokens.map((t) => {
@@ -536,17 +563,19 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
               );
             })}
 
-            {/* arrows */}
-            {arrows.map((a) => {
+            {/* arrows — numbered in draw order (1 = first line drawn) */}
+            {arrows.map((a, i) => {
               const p = arrowPx(a);
               const selected = a.id === selId;
               const onDown = (e) => onArrowDown(e, a);
               const halo = selected ? { stroke: "#38BDF8", strokeWidth: 8, opacity: 0.35 } : null;
+              const num = <ArrowNumber {...p} n={i + 1} onPointerDown={onDown} />;
               if (a.kind === "dribble") {
                 return (
                   <g key={a.id}>
                     {halo && <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" {...halo} strokeLinecap="round" />}
                     <path d={wavyPath(p.x1, p.y1, p.x2, p.y2)} fill="none" stroke={ARROW_WHITE} strokeWidth={3.5} strokeLinecap="round" markerEnd="url(#tb-head)" onPointerDown={onDown} style={{ cursor: "pointer" }} />
+                    {num}
                   </g>
                 );
               }
@@ -556,6 +585,7 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
                   <g key={a.id} onPointerDown={onDown} style={{ cursor: "pointer" }}>
                     <line x1={p.x1 + ox} y1={p.y1 + oy} x2={p.x2 + ox} y2={p.y2 + oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" />
                     <line x1={p.x1 - ox} y1={p.y1 - oy} x2={p.x2 - ox} y2={p.y2 - oy} stroke={ARROW_WHITE} strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#tb-head)" />
+                    {num}
                   </g>
                 );
               }
@@ -565,6 +595,7 @@ export default function TacticsBoard({ initial, onSave, onClose }) {
                   <line {...p} stroke={ARROW_WHITE} strokeWidth={a.kind === "pass" ? 3.5 : 4} strokeLinecap="round"
                     strokeDasharray={a.kind === "run" ? "10 7" : undefined}
                     markerEnd={a.kind === "pass" ? "url(#tb-open)" : "url(#tb-head)"} onPointerDown={onDown} style={{ cursor: "pointer" }} />
+                  {num}
                 </g>
               );
             })}
