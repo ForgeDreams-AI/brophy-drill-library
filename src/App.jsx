@@ -88,13 +88,16 @@ function LegendChips() {
 // ── drill card (library grid) ──────────────────────────────────────────────
 function DrillCard({ drill, onOpen }) {
   const s = drill.setup || {};
+  const [imgOk, setImgOk] = useState(true);
   return (
     <button
       onClick={onOpen}
       className="text-left bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:border-slate-300 transition-shadow focus:outline-none focus:ring-2 focus:ring-[#A6192E]"
     >
       <div className="aspect-[4/3] bg-white border-b border-slate-100 overflow-hidden flex items-center justify-center">
-        {drill.diagramData
+        {drill.diagramImage && imgOk
+          ? <img src={drill.diagramImage} alt="" className="w-full h-full object-cover" onError={() => setImgOk(false)} />
+          : drill.diagramData
           ? <BoardSvg state={drill.diagramData} className="w-full h-full" />
           : (
             <div className="flex flex-col items-center gap-2 text-slate-300 px-4">
@@ -125,6 +128,7 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
   const s = drill.setup || {};
   const embed = youTubeEmbed(drill.videoUrl);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [imgOk, setImgOk] = useState(true);
   const setupItems = [
     s.lengthYd && s.widthYd ? { k: "Grid", v: `${s.lengthYd} × ${s.widthYd} yd` } : null,
     s.cones ? { k: "Cones", v: String(s.cones) } : null,
@@ -167,8 +171,12 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
         )}
       </div>
 
-      {/* diagram */}
-      {drill.diagramData ? (
+      {/* diagram — photo from the video wins over a hand-drawn one */}
+      {drill.diagramImage && imgOk ? (
+        <div className="mt-5 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <img src={drill.diagramImage} alt="Diagram" className="w-full" onError={() => setImgOk(false)} />
+        </div>
+      ) : drill.diagramData ? (
         <div className="mt-5 bg-white rounded-2xl border border-slate-200 overflow-hidden">
           <BoardSvg state={drill.diagramData} showLegend className="w-full" />
           <div className="px-4 py-3 border-t border-slate-100"><LegendChips /></div>
@@ -257,11 +265,12 @@ function DrillDetail({ drill, isCoach, onBack, onEdit, onDuplicate, onDelete }) 
 }
 
 // ── incoming drill from the Soccer Video Library ───────────────────────────
-// The library links here as ?add=1&name=…&cat=…&videoUrl=…&coach=…&desc=…
+// The library links here as ?add=1&name=…&cat=…&videoUrl=…&coach=…&desc=…&diagram=…
 // so a coach can turn a saved video into a drill without retyping it.
 // cat must be one of the 15 drill categories; anything else (e.g. the video
 // library's "Technical" / "Unsorted") falls back to the form default and the
-// coach picks the category.
+// coach picks the category. diagram is the video's setup still — it becomes
+// the drill's diagram photo, so nobody has to hand-draw the diagram.
 function parseIncoming() {
   try {
     const q = new URLSearchParams(window.location.search);
@@ -272,11 +281,14 @@ function parseIncoming() {
     const cat = (q.get("cat") || "").trim();
     const coach = (q.get("coach") || "").trim();
     const desc = (q.get("desc") || "").trim();
+    const diagram = (q.get("diagram") || "").trim();
+    const diagramImage = diagram.startsWith("https://forgedreams-ai.github.io/soccer-video-library/thumbs/") && diagram.endsWith(".jpg") ? diagram : "";
     return {
       name,
       cat: DRILL_CATEGORIES.includes(cat) ? cat : "",
       videoUrl,
       desc,
+      diagramImage,
       info: coach ? `Source: @${coach} (Soccer Video Library)` : "Source: Soccer Video Library",
       tags: ["video-library"],
     };
@@ -288,7 +300,7 @@ function parseIncoming() {
 function clearIncomingParams() {
   try {
     const u = new URL(window.location.href);
-    ["add", "name", "cat", "videoUrl", "coach", "desc"].forEach((k) => u.searchParams.delete(k));
+    ["add", "name", "cat", "videoUrl", "coach", "desc", "diagram"].forEach((k) => u.searchParams.delete(k));
     window.history.replaceState({}, "", u.pathname + u.search);
   } catch {}
 }
@@ -298,6 +310,7 @@ const BLANK_FORM = {
   name: "", cat: DRILL_CATEGORIES[0], tags: "", dur: "", players: "",
   setupGrid: "", equipment: "",
   howTo: "", objectives: "", desc: "", info: "", videoUrl: "", diagramData: null,
+  diagramImage: "",
   // Kept in state so editing an older drill never wipes its counts —
   // they just aren't shown in the form anymore.
   setupCones: "", setupBalls: "", setupGoals: "", setupMannequins: "",
@@ -313,6 +326,7 @@ function drillToForm(d) {
     howTo: d.howTo || "", objectives: (d.objectives || []).join("\n"),
     desc: d.desc || "", info: d.info || "", videoUrl: d.videoUrl || "",
     diagramData: d.diagramData || null,
+    diagramImage: d.diagramImage || "",
     setupCones: s.cones ?? "", setupBalls: s.balls ?? "",
     setupGoals: s.goals ?? "", setupMannequins: s.mannequins ?? "",
   };
@@ -352,6 +366,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
         equipment: form.equipment.split(",").map((t) => t.trim()).filter(Boolean),
       },
       diagramData: form.diagramData || null,
+      diagramImage: form.diagramImage.trim() || null,
       howTo: form.howTo.trim(),
       objectives: lines(form.objectives),
       desc: form.desc.trim(),
@@ -432,10 +447,18 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
           <textarea id="f-howto" value={form.howTo} onChange={(e) => setForm({ ...form, howTo: e.target.value })} rows={3} placeholder={"Set the grid\nSplit into two teams\nPlay 3 minutes, then rotate"} className={inputCls} />
         </div>
 
-        {/* diagram — optional, one tap away */}
+        {/* diagram — optional, one tap away. A photo from the video wins
+            over a hand-drawn diagram; drawing one replaces the photo. */}
         <div>
           <span className={labelCls}>Diagram (optional)</span>
-          {form.diagramData ? (
+          {form.diagramImage ? (
+            <div className="relative">
+              <img src={form.diagramImage} alt="Diagram photo from the video" className="w-full rounded-xl border border-slate-200" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+              <button type="button" onClick={() => setForm({ ...form, diagramImage: "" })} className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/95 border border-slate-200 flex items-center justify-center shadow" aria-label="Remove diagram photo">
+                <X className="w-4 h-4 text-slate-600" />
+              </button>
+            </div>
+          ) : form.diagramData ? (
             <div className="relative">
               <BoardSvg state={form.diagramData} showLegend className="w-full rounded-xl border border-slate-200" />
               <button type="button" onClick={() => setForm({ ...form, diagramData: null })} className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/95 border border-slate-200 flex items-center justify-center shadow" aria-label="Remove diagram">
@@ -443,8 +466,9 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
               </button>
             </div>
           ) : null}
+          {form.diagramImage ? <p className="mt-1 text-xs font-semibold text-slate-500">Diagram photo from the video — no drawing needed.</p> : null}
           <button type="button" onClick={() => setBoardOpen(true)} className="mt-2 w-full py-3 rounded-full text-sm font-bold bg-slate-100 text-slate-700 flex items-center justify-center gap-2 min-h-12">
-            <Layers className="w-4 h-4" /> {form.diagramData ? "Edit diagram" : "Add a diagram"}
+            <Layers className="w-4 h-4" /> {form.diagramImage ? "Replace with a hand-drawn diagram" : form.diagramData ? "Edit diagram" : "Add a diagram"}
           </button>
         </div>
 
@@ -487,6 +511,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
             setForm((p) => ({
               ...p,
               diagramData: state,
+              diagramImage: "",
               setupGrid: state?.lengthYd && state?.widthYd ? `${state.lengthYd} × ${state.widthYd}` : p.setupGrid,
             }));
             setBoardOpen(false);
@@ -547,6 +572,7 @@ function SuggestionRow({ s, alreadyAdded, onApprove, onDismiss }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
+        {s.diagramImage ? <img src={s.diagramImage} alt="" className="w-20 h-20 rounded-xl object-cover border border-slate-200 flex-shrink-0" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
         <div className="min-w-0">
           <span className="inline-block text-[10px] font-black uppercase tracking-wider px-2 py-1 rounded-full text-white" style={{ backgroundColor: RED }}>{s.cat || "Unsorted"}</span>
           <h3 className="mt-2 text-base font-bold leading-snug" style={{ color: RED }}>{s.name}</h3>
@@ -703,7 +729,7 @@ export default function App() {
   const approveSuggestion = (s) => {
     setView({
       name: "form",
-      drill: { name: s.name, cat: s.cat, videoUrl: s.videoUrl, desc: s.desc || "", info: s.info || "", tags: s.tags || [] },
+      drill: { name: s.name, cat: s.cat, videoUrl: s.videoUrl, desc: s.desc || "", info: s.info || "", tags: s.tags || [], diagramImage: s.diagramImage || "" },
       suggestionId: s.id,
     });
     window.scrollTo(0, 0);
