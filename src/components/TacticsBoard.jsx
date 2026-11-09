@@ -70,16 +70,33 @@ function PitchMarks({ preset, wYd, dYd, pitchH }) {
 
   if (preset.orient === "portrait") {
     // Goal at the top; penalty box measured down from the top line.
-    const boxW = preset.id === "box" ? wYd : 44, boxD = 18, sixW = 20, sixD = 6;
+    // The penalty box is ALWAYS its true 44 yd wide — never stretched to
+    // fill the preset — so it stays in proportion to the field (15.5 yd
+    // of field on each side on the half pitch and the final third).
+    // NOTE: X()/Y() take YARDS; cx is pixels. Use midYd (yards) for the
+    // centre whenever a value goes through X() — passing cx (pixels) drew
+    // the box and arc far off-screen, so the portrait pitches showed no box.
+    const boxW = 44, boxD = 18, sixW = 20, sixD = 6;
+    const midYd = wYd / 2;
+    // Centre-circle arc on the halfway line (half pitch only): the circle
+    // is centred on the bottom edge, so only its top half shows — the
+    // visual cue that this is a true half of the field.
+    const centreArc = preset.id === "half" ? (
+      <path
+        d={`M ${X(midYd - 10).toFixed(1)} ${Y(dYd).toFixed(1)} A ${((10 / wYd) * (VB_W - 2 * M)).toFixed(1)} ${((10 / dYd) * (pitchH - 2 * M)).toFixed(1)} 0 0 1 ${X(midYd + 10).toFixed(1)} ${Y(dYd).toFixed(1)}`}
+        {...L}
+      />
+    ) : null;
     return (
       <g>
         {bg}{stripes}{boundary}
         {goalBar(cx, M, true)}
-        <rect x={X(cx - boxW / 2)} y={M} width={X(cx + boxW / 2) - X(cx - boxW / 2)} height={Y(boxD) - M} {...L} />
-        <rect x={X(cx - sixW / 2)} y={M} width={X(cx + sixW / 2) - X(cx - sixW / 2)} height={Y(sixD) - M} {...L} />
+        <rect x={X(midYd - boxW / 2)} y={M} width={X(midYd + boxW / 2) - X(midYd - boxW / 2)} height={Y(boxD) - M} {...L} />
+        <rect x={X(midYd - sixW / 2)} y={M} width={X(midYd + sixW / 2) - X(midYd - sixW / 2)} height={Y(sixD) - M} {...L} />
         <circle cx={cx} cy={Y(12)} r={4} fill="rgba(255,255,255,0.85)" />
-        {arc(cx, 12, boxD, false)}
+        {arc(midYd, 12, boxD, false)}
         <line x1={M} y1={pitchH - M} x2={VB_W - M} y2={pitchH - M} {...L} strokeWidth={4} />
+        {centreArc}
       </g>
     );
   }

@@ -19,17 +19,21 @@ export const LEG_H = 76;      // legend strip height (drawn in the SVG, exports 
 export const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // ── Pitch presets — real yard dimensions, correct proportions ──────────────
+// Pro field is 115 × 75 yd (FIFA 105 m × 68 m). Every preset is a true slice
+// of it: half = half the length, final third = a third of the length, both
+// at the FULL 75 yd width, so the penalty box (44 × 18 yd) always sits in
+// its real proportion — 15.5 yd of field on each side — never stretched.
 export const BOARD_PRESETS = [
   { id: "full", label: "Full pitch", lengthYd: 115, widthYd: 75, orient: "landscape", note: "115 × 75 yd" },
-  { id: "half", label: "Half pitch", lengthYd: 58, widthYd: 75, orient: "portrait", note: "75 × 58 yd" },
-  { id: "box", label: "Penalty box", lengthYd: 36, widthYd: 44, orient: "portrait", note: "44 × 36 yd" },
+  { id: "half", label: "Half pitch", lengthYd: 57.5, widthYd: 75, orient: "portrait", note: "75 × 57.5 yd" },
+  { id: "third", label: "Final third", lengthYd: 38, widthYd: 75, orient: "portrait", note: "75 × 38 yd" },
   { id: "grid", label: "Grid / zone", lengthYd: 30, widthYd: 20, orient: "landscape", note: "custom yd" },
 ];
 
 // Back-compat: map the old board state (field/tokens/arrows only) to v2.
 export function normalizeBoardState(initial) {
   const raw = initial || {};
-  const fieldMap = { soccer: "full", "soccer-half": "half", "soccer-third": "half", "soccer-box": "box", blank: "grid", basketball: "grid", football: "grid" };
+  const fieldMap = { soccer: "full", "soccer-half": "half", "soccer-third": "third", "soccer-box": "third", box: "third", blank: "grid", basketball: "grid", football: "grid" };
   const field = BOARD_PRESETS.some((p) => p.id === raw.field) ? raw.field : (fieldMap[raw.field] || "half");
   const preset = BOARD_PRESETS.find((p) => p.id === field);
   const tokenMap = { home: "focus", away: "opp", neutral: "gk" };
@@ -50,7 +54,9 @@ export function boardDims(state) {
   const preset = BOARD_PRESETS.find((p) => p.id === s.field) || BOARD_PRESETS[1];
   const wYd = preset.orient === "portrait" ? s.widthYd : s.lengthYd;
   const dYd = preset.orient === "portrait" ? s.lengthYd : s.widthYd;
-  const ph = clamp(Math.round((VB_W * dYd) / wYd), 380, 920);
+  // Min height 320 (not 380) so the final third's true height (~345) is not
+  // stretched taller — the pitch must keep its real yard aspect.
+  const ph = clamp(Math.round((VB_W * dYd) / wYd), 320, 920);
   return { preset, wYd, dYd, pitchH: ph, vbH: ph + LEG_H };
 }
 
