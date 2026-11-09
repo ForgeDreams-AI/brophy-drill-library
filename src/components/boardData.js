@@ -5,14 +5,92 @@
 //
 // Board state (v2, stored on the drill doc as `diagramData`):
 //   { field, lengthYd, widthYd, tokens, arrows, zones }
-//   token: { id, kind: 'focus'|'opp'|'gk'|'ball'|'cone'|'goal'|'mannequin', x, y, label }
-//   arrow: { id, kind: 'pass'|'run'|'dribble'|'shot'|'direction', from:{x,y}, to:{x,y} }
+//   token: { id, kind: 'focus'|'opp'|'gk'|'ball'|'cone'|'goal'|'mannequin'|'pole'|'ladder', x, y, label, rot? }
+//     rot = rotation in degrees (equipment only: goal, mannequin, pole, ladder)
+//   arrow: { id, kind: 'pass'|'run'|'dribble'|'shot'|'direction'|'freehand', from:{x,y}, to:{x,y}, bend?, color?, points? }
+//     bend = optional quadratic control point {x,y} — a bent (curved) arrow;
+//       absent = straight. points = freehand polyline [{x,y}…] (kind 'freehand').
 //   zone:  { id, shape: 'rect'|'circle', x, y, w, h }   (x,y,w,h normalized 0..1)
 //
 // Arrow legend (fixed everywhere — printed on every diagram export):
 //   pass = solid line, OPEN arrowhead · run = dashed · dribble = wavy
 //   shot = double line · direction = plain solid
 // Team colours: focus = blue, opponents = red, goalkeeper = yellow.
+
+export const ARROW_COLORS = ["#FFFFFF", "#FACC15", "#38BDF8"]; // white, yellow, sky
+// Approximate half-size of each token kind, in board units — used for hit
+// areas and for smart-guide edge snapping.
+export const TOKEN_HALF = { focus: 19, opp: 19, gk: 19, ball: 12, cone: 13, goal: 42, mannequin: 13, pole: 6, ladder: 20 };
+
+// Sample a quadratic Bézier (p1, control, p2) at N points.
+const quadSamples = (p1, c, p2, n = 16) => {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t;
+    pts.push({ x: u * u * p1.x + 2 * u * t * c.x + t * t * p2.x, y: u * u * p1.y + 2 * u * t * c.y + t * t * p2.y });
+  }
+  return pts;
+};
+const polylineD = (pts) => pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
+// Apply a tapered sine wiggle along a sampled polyline (the dribble squiggle).
+const wavyAlong = (pts, amp = 7, wl = 20) => {
+  const len = pts.reduce((s, p, i) => (i ? s + Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) : 0), 0) || 1;
+  return pts.map((p, i) => {
+    const t = i / (pts.length - 1);
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+    const off = Math.sin(t * (len / wl) * Math.PI * 2) * amp * Math.sin(t * Math.PI);
+    return { x: p.x + (-dy / l) * off, y: p.y + (dx / l) * off };
+  });
+};
+// Offset a sampled polyline sideways by `off` board units (shot double line).
+const offsetAlong = (pts, off) => pts.map((p, i) => {
+  const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)];
+  const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+  return { x: p.x + (-dy / l) * off, y: p.y + (dx / l) * off };
+});
+
+// Geometry for one arrow in pixel coords. px(x)/py(y) map normalized 0..1
+// board coords to SVG pixels. Returns { d, d2, mid, pts }:
+//   d = main path, d2 = second line for shot (else null),
+//   mid = pixel point of the number badge (curve midpoint),
+//   pts = sampled centreline (for the invisible hit path).
+export function arrowGeom(a, px, py) {
+  if (a.kind === "freehand" && Array.isArray(a.points) && a.points.length > 1) {
+    const pts = a.points.map((p) => ({ x: px(p.x), y: py(p.y) }));
+    return { d: polylineD(pts), d2: null, mid: pts[Math.floor(pts.length / 2)], pts };
+  }
+  const p1 = { x: px(a.from.x), y: py(a.from.y) };
+  const p2 = { x: px(a.to.x), y: py(a.to.y) };
+  const c = a.bend ? { x: px(a.bend.x), y: py(a.bend.y) } : { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  let pts = quadSamples(p1, c, p2);
+  const mid = pts[Math.floor(pts.length / 2)];
+  if (a.kind === "dribble") pts = wavyAlong(pts);
+  if (a.kind === "shot") {
+    return { d: polylineD(offsetAlong(pts, 4)), d2: polylineD(offsetAlong(pts, -4)), mid, pts };
+  }
+  return { d: polylineD(pts), d2: null, mid, pts };
+}
+
+// Pitch-line snap targets in normalized board coords (penalty-box edges,
+// six-yard box, halfway line, penalty spots, goal lines). The editor's
+// smart guides snap live to these while dragging.
+export function pitchSnapLines(state) {
+  const { preset, wYd, dYd } = boardDims(state);
+  const xs = [], ys = [];
+  if (preset.orient === "portrait") {
+    const mid = wYd / 2;
+    xs.push(0, (mid - 22) / wYd, 0.5, (mid + 22) / wYd, (mid - 10) / wYd, (mid + 10) / wYd, 1);
+    ys.push(0, 6 / dYd, 12 / dYd, 18 / dYd, 1);
+  } else if (preset.id === "full") {
+    xs.push(0, 6 / wYd, 12 / wYd, 18 / wYd, 0.5, 1 - 18 / wYd, 1 - 12 / wYd, 1 - 6 / wYd, 1);
+    ys.push(0, (dYd - 44) / 2 / dYd, (dYd - 20) / 2 / dYd, 0.5, (dYd + 20) / 2 / dYd, (dYd + 44) / 2 / dYd, 1);
+  } else {
+    xs.push(0, 0.5, 1);
+    ys.push(0, 0.5, 1);
+  }
+  return { xs: xs.filter((v) => v >= 0 && v <= 1), ys: ys.filter((v) => v >= 0 && v <= 1) };
+}
 
 export const VB_W = 680;      // board width in viewBox units
 export const LEG_H = 76;      // legend strip height (drawn in the SVG, exports with it)

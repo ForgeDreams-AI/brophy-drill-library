@@ -507,6 +507,7 @@ function DrillForm({ initial, onCancel, onSaved, user }) {
       {boardOpen && (
         <TacticsBoard
           initial={form.diagramData}
+          title={form.name || "Diagram"}
           onSave={(_blob, state) => {
             setForm((p) => ({
               ...p,
