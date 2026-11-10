@@ -59,11 +59,25 @@ const colorKey = (c) => (c || ARROW_WHITE).replace("#", "");
 
 // Number badge on an arrow: a dark disc with a white ring and a bold white
 // number, centred on the arrow's midpoint (the curve midpoint when bent).
-// Numbers run in draw order (1 = first line drawn), so the sequence of a
-// drill reads off the board and renumbers itself when a line is deleted.
-// The disc sits on top of the line so it reads on the green pitch and on
-// the line itself, and it is part of the SVG so it exports with the PNG.
+// Numbers run PER LINE TYPE (1 = first line of that kind drawn), so a pass
+// and a run each start at 1 and a drill reads per type, not as one long
+// global count. Freehand tracks are animation paths, not steps, so they
+// carry no badge at all. Numbers renumber themselves when a line is
+// deleted. The disc sits on top of the line so it reads on the green pitch
+// and on the line itself, and it is part of the SVG so it exports with the PNG.
 const ARROW_NUM_R = 14;
+// Badge number for arrows[i]: its 1-based position among arrows of the same
+// kind drawn up to and including it. Returns null for freehand tracks
+// (animation paths), which get no badge.
+function arrowBadgeNumber(arrows, i) {
+  const a = arrows[i];
+  if (!a || a.kind === "freehand") return null;
+  let n = 0;
+  for (let j = 0; j <= i; j++) {
+    if (arrows[j].kind === a.kind) n++;
+  }
+  return n;
+}
 function ArrowNumber({ x, y, n, dataAid, onPointerDown }) {
   return (
     <g>
@@ -250,7 +264,7 @@ function ArrowMarkers() {
 
 // One arrow: visible line(s) + number badge. `interactive` adds the fat
 // invisible hit path and the bend handle (editor only).
-function ArrowShape({ a, index, px, py, interactive, selected, onDown }) {
+function ArrowShape({ a, num, px, py, interactive, selected, onDown }) {
   const geom = arrowGeom(a, px, py);
   const color = a.color || ARROW_WHITE;
   const key = colorKey(color);
@@ -274,7 +288,7 @@ function ArrowShape({ a, index, px, py, interactive, selected, onDown }) {
         </g>
         : <path d={geom.d} fill="none" stroke={color} strokeWidth={width} strokeLinecap="round"
           strokeDasharray={dash} markerEnd={head} style={{ pointerEvents: interactive ? "none" : undefined }} />}
-      <ArrowNumber x={geom.mid.x} y={geom.mid.y} n={index + 1} dataAid={interactive ? a.id : undefined} onPointerDown={interactive ? onDown : undefined} />
+      {num != null && <ArrowNumber x={geom.mid.x} y={geom.mid.y} n={num} dataAid={interactive ? a.id : undefined} onPointerDown={interactive ? onDown : undefined} />}
       {interactive && selected && (
         <g>
           {a.bend && <line x1={geom.mid.x} y1={geom.mid.y} x2={bendPos.x} y2={bendPos.y} stroke="#38BDF8" strokeWidth={2} strokeDasharray="4 3" style={{ pointerEvents: "none" }} />}
@@ -303,7 +317,7 @@ export function BoardSvg({ state, className = "", showLegend = false }) {
           ? <circle key={z.id} cx={px(z.x)} cy={py(z.y)} r={z.r * (VB_W - 2 * M)} fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.7)" strokeWidth={2} strokeDasharray="8 6" />
           : <rect key={z.id} x={px(z.x)} y={py(z.y)} width={z.w * (VB_W - 2 * M)} height={z.h * (pitchH - 2 * M)} fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.7)" strokeWidth={2} strokeDasharray="8 6" rx={6} />
       ))}
-      {s.arrows.map((a, i) => <ArrowShape key={a.id} a={a} index={i} px={px} py={py} />)}
+      {s.arrows.map((a, i) => <ArrowShape key={a.id} a={a} num={arrowBadgeNumber(s.arrows, i)} px={px} py={py} />)}
       {s.tokens.map((t) => <TokenGlyph key={t.id} t={t} x={px(t.x)} y={py(t.y)} />)}
       {showLegend && <LegendStrip y={pitchH} />}
     </svg>
@@ -1791,9 +1805,9 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
                 );
               })}
 
-              {/* arrows — numbered in draw order */}
+              {/* arrows — numbered per line type; freehand tracks carry no badge */}
               {arrows.map((a, i) => (
-                <ArrowShape key={a.id} a={a} index={i} px={px} py={py} interactive selected={sel.includes(a.id)} />
+                <ArrowShape key={a.id} a={a} num={arrowBadgeNumber(arrows, i)} px={px} py={py} interactive selected={sel.includes(a.id)} />
               ))}
 
               {/* tokens — at their animated position while playing/paused */}
