@@ -109,6 +109,23 @@ const numOrNull = (v) => {
   return v === "" || v === null || v === undefined || Number.isNaN(n) ? null : n;
 };
 
+// Firestore rejects `undefined` ANYWHERE in a document — and the board
+// editor used to write `bend: undefined` onto straightened arrows (an own
+// property with an undefined value survives every spread, so it sailed
+// straight into addDoc and killed the save with "Unsupported field value:
+// undefined"). Deep-strip undefined so a drawing can never break a save.
+export function stripUndefined(v) {
+  if (Array.isArray(v)) return v.map(stripUndefined);
+  if (v && typeof v === "object") {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+      if (val !== undefined) out[k] = stripUndefined(val);
+    }
+    return out;
+  }
+  return v;
+}
+
 // A drill doc → the quick-add form's state. Team-app-only fields (title,
 // photos, scenario, cues, kind, setup teams/grid, raster diagram) ride
 // along in state so editing in the library never wipes them — they just
@@ -173,7 +190,7 @@ export function formToDrillPayload(form) {
       mannequins: numOrNull(form.setupMannequins),
       equipment: form.equipment.split(",").map((t) => t.trim()).filter(Boolean),
     },
-    diagramData: form.diagramData || null,
+    diagramData: form.diagramData ? stripUndefined(form.diagramData) : null,
     diagramImage: form.diagramImage.trim() || null,
     diagram: form.diagram || null,
     photos: Array.isArray(form.photos) ? form.photos : [],

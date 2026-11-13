@@ -1037,12 +1037,15 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
       const copies = [];
       as.forEach((a) => {
         if (sel.includes(a.id)) {
+          // No `bend: undefined` — Firestore rejects undefined anywhere in
+          // a doc, and a spread would carry it into the save. Omit the key.
           const c = {
             ...a, id: rid(),
             from: { x: clamp01(a.from.x + 0.04), y: clamp01(a.from.y + 0.04) },
             to: { x: clamp01(a.to.x + 0.04), y: clamp01(a.to.y + 0.04) },
-            bend: a.bend ? { x: clamp01(a.bend.x + 0.04), y: clamp01(a.bend.y + 0.04) } : undefined,
           };
+          delete c.bend;
+          if (a.bend) c.bend = { x: clamp01(a.bend.x + 0.04), y: clamp01(a.bend.y + 0.04) };
           copies.push(c); newIds.push(c.id);
         }
       });
@@ -1510,11 +1513,13 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
       }
       case "bend": {
         // Released almost on the straight line → straighten it back.
+        // Delete the key — `bend: undefined` would poison the Firestore save.
         setArrows((as) => as.map((a) => {
           if (a.id !== g.id || !a.bend) return a;
           const mx = (a.from.x + a.to.x) / 2, my = (a.from.y + a.to.y) / 2;
           const d = Math.hypot((a.bend.x - mx) * VB_W, (a.bend.y - my) * pitchH);
-          return d < 10 ? { ...a, bend: undefined } : a;
+          if (d < 10) { const c = { ...a }; delete c.bend; return c; }
+          return a;
         }));
         break;
       }
@@ -1693,7 +1698,13 @@ export default function TacticsBoard({ initial, onSave, onClose, title = "Diagra
   };
   const setArrowColorOf = (id, color) => setArrows((as) => as.map((a) => (a.id === id ? { ...a, color } : a)));
   const setArrowKindOf = (id, kind) => setArrows((as) => as.map((a) => (a.id === id ? { ...a, kind } : a)));
-  const straightenArrow = (id) => setArrows((as) => as.map((a) => (a.id === id ? { ...a, bend: undefined } : a)));
+  // Delete the key — `bend: undefined` would poison the Firestore save.
+  const straightenArrow = (id) => setArrows((as) => as.map((a) => {
+    if (a.id !== id) return a;
+    const c = { ...a };
+    delete c.bend;
+    return c;
+  }));
   const setZoneShape = (id, shape) => setZones((zs) => zs.map((z) => {
     if (z.id !== id || z.shape === shape) return z;
     if (shape === "circle") return { ...z, shape: "circle", x: z.x + z.w / 2, y: z.y + z.h / 2, r: Math.max(0.02, Math.min(z.w, z.h) / 2) };
