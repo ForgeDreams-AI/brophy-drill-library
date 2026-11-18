@@ -1,4 +1,4 @@
-// The 17 drill categories — the same set the Brophy TeamHub app uses, so a
+// The 18 drill categories — the same set the Brophy TeamHub app uses, so a
 // drill means the same thing in both places. Order follows a session flow:
 // warm up, technique, passing, staples, possessions, attacking, then the
 // rest (build-up, out of possession, set pieces). Coaches can also add
@@ -22,4 +22,5 @@ export const DRILL_CATEGORIES = [
   "Getting into shapes",
   "Line of confrontation",
   "Set pieces",
+  "Full Practices",
 ];

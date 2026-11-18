@@ -9,7 +9,7 @@
 //   kind?: "drill" — anything else (e.g. legacy "point" coaching-point
 //     items from the old `drills` collection) is NOT a drill and is
 //     filtered out of every list
-//   cat: string — one of the 17 DRILL_CATEGORIES; coaches can also add
+//   cat: string — one of the 18 DRILL_CATEGORIES; coaches can also add
 //     their own from the drill form. Any other value still renders, and
 //     once a drill uses it the category shows in the filter list.
 //   tags?: string[]

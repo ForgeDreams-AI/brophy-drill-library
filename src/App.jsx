@@ -321,7 +321,7 @@ export function DrillDetail({ drill, canEdit, onBack, onEdit, onDuplicate, onDel
 // ── incoming drill from the Soccer Video Library ───────────────────────────
 // The library links here as ?add=1&name=…&cat=…&videoUrl=…&coach=…&desc=…&diagram=…
 // so a coach can turn a saved video into a drill without retyping it.
-// cat must be one of the 17 drill categories; anything else (e.g. the video
+// cat must be one of the 18 drill categories; anything else (e.g. the video
 // library's "Technical" / "Unsorted") falls back to the form default and the
 // coach picks the category. diagram is the video's setup still — it becomes
 // the drill's diagram photo, so nobody has to hand-draw the diagram.
@@ -720,7 +720,7 @@ export default function App() {
     return () => unsub();
   }, [isCoach, user]);
 
-  // Filter pills = the 17 built-in categories + any custom category a coach
+  // Filter pills = the 18 built-in categories + any custom category a coach
   // added on a drill (same as the TeamHub app), so a new category shows up
   // to filter by as soon as a drill uses it.
   const cats = useMemo(() => {
