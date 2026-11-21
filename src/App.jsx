@@ -29,6 +29,7 @@ import {
   onAuthStateChanged, signInWithPopup, GoogleAuthProvider,
   signInWithEmailAndPassword, signOut,
 } from "firebase/auth";
+import { terminate, clearIndexedDbPersistence } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import { DRILL_CATEGORIES } from "./data/categories";
 import { normalizeDrillDoc, drillDocToForm, formToDrillPayload, DRILL_KIND } from "./lib/drillDoc";
@@ -561,10 +562,10 @@ function SignInModal({ onClose }) {
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-black" style={{ color: RED }}>Coach sign in</h2>
+          <h2 className="text-lg font-black" style={{ color: RED }}>Sign in</h2>
           <button onClick={onClose} aria-label="Close" className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center"><X className="w-4 h-4 text-slate-600" /></button>
         </div>
-        <p className="mt-1 text-sm text-slate-500">Sign in with your Brophy account. Only coaches and drill builders can add drills — everyone else just browses.</p>
+        <p className="mt-1 text-sm text-slate-500">Sign in with your Brophy account. Only coaches and drill builders can add drills — everyone else signed in can browse.</p>
         <button onClick={google} disabled={busy} className="mt-4 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12 disabled:opacity-50" style={{ backgroundColor: RED }}>
           <LogIn className="w-4 h-4" /> Continue with Google
         </button>
@@ -616,6 +617,14 @@ function SuggestionRow({ s, alreadyAdded, onApprove, onDismiss }) {
   );
 }
 
+// Sign out and wipe the offline drill cache on this device, so the next
+// (signed-out) visitor on a shared computer can't see cached drills.
+async function signOutAndClear() {
+  try { await signOut(auth); } catch { /* already signed out */ }
+  try { await terminate(db); await clearIndexedDbPersistence(db); } catch { /* best effort */ }
+  window.location.reload();
+}
+
 // ── app ────────────────────────────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(null);
@@ -641,7 +650,9 @@ export default function App() {
   // studio): coaches plus the drillBuilder role — a person who builds drills
   // in this library but has no team-app access. The Review queue stays
   // coach-only (isCoach): a drillBuilder never sees it, approves, or
-  // dismisses. Browsing stays public, suggesting stays any-signed-in-user.
+  // dismisses. Browsing needs a signed-in account (decision 2026-11-21 — the
+  // Firestore rules deny drillLibrary reads to signed-out visitors), and
+  // suggesting stays any-signed-in-user.
   const canBuild = isCoach || role === "drillBuilder";
 
   // Incoming video-library pick → the review queue (limbo). Any signed-in
@@ -692,9 +703,12 @@ export default function App() {
     }
   }), []);
 
-  // Live drill list. If Firestore can't be reached (offline / sandbox), fall
-  // back to the empty state after a short wait instead of spinning forever.
+  // Live drill list — signed-in users only (the sign-in gate below shows for
+  // everyone else, and nothing is read until sign-in). If Firestore can't be
+  // reached (offline / sandbox), fall back to the empty state after a short
+  // wait instead of spinning forever.
   useEffect(() => {
+    if (!user) return;
     timeoutRef.current = setTimeout(() => { setLoading(false); setOffline(true); }, 8000);
     const unsub = onSnapshot(
       query(collection(db, "drillLibrary"), orderBy("createdAt", "desc")),
@@ -707,7 +721,7 @@ export default function App() {
       () => { clearTimeout(timeoutRef.current); setLoading(false); setOffline(true); },
     );
     return () => { unsub(); clearTimeout(timeoutRef.current); };
-  }, []);
+  }, [user]);
 
   // Live review queue — coaches only.
   useEffect(() => {
@@ -781,6 +795,33 @@ export default function App() {
     openDetail(id);
   };
 
+  // ── sign-in gate ──
+  // Signed-out visitors see only this screen: no drills are requested and
+  // none are rendered (the device cache is cleared on sign-out, so a shared
+  // computer can't show the last user's drills either).
+  if (!roleChecked) {
+    return <div className="min-h-screen flex items-center justify-center text-sm font-semibold text-slate-400" style={{ backgroundColor: "#F4F6F8" }}>Loading…</div>;
+  }
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: RED }}>
+        <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl text-center">
+          <div className="w-14 h-14 mx-auto rounded-2xl flex items-center justify-center" style={{ backgroundColor: "#FBECEC" }}>
+            <BookOpen className="w-7 h-7" style={{ color: RED }} />
+          </div>
+          <div className="mt-3 text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Brophy College Prep</div>
+          <h1 className="text-2xl font-black" style={{ color: RED }}>Drill Library</h1>
+          <p className="mt-2 text-sm text-slate-500">Sign in with your Brophy account to see the drills.</p>
+          {incoming && <p className="mt-2 text-xs font-semibold text-amber-700">Sign in to send your video suggestion to the coaches.</p>}
+          <button onClick={() => setSignInOpen(true)} className="mt-5 w-full py-3 rounded-full text-sm font-bold text-white flex items-center justify-center gap-2 min-h-12" style={{ backgroundColor: RED }}>
+            <LogIn className="w-4 h-4" /> Sign in
+          </button>
+        </div>
+        {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
+      </div>
+    );
+  }
+
   return (
     <>
     {/* .app-shell: hidden in print — only #print-sheet prints (see index.css). */}
@@ -810,7 +851,7 @@ export default function App() {
               </button>
             )}
             {user ? (
-              <button onClick={() => signOut(auth)} title={user.email || ""} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white/10 min-h-11">
+              <button onClick={signOutAndClear} title={user.email || ""} className="flex items-center gap-1.5 text-xs font-bold px-3 py-2.5 rounded-full bg-white/10 min-h-11">
                 <LogOut className="w-4 h-4" /> <span className="hidden sm:inline">{user.displayName?.split(" ")[0] || "Coach"}</span>
               </button>
             ) : (

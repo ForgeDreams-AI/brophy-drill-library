@@ -47,7 +47,7 @@ service cloud.firestore {
 
     // ── drill library ──────────────────────────────────────────────────────
     match /drillLibrary/{drillId} {
-      allow read: if true;
+      allow read: if request.auth != null; // signed-in only (decision 2026-11-21)
       allow create: if canBuild()
         && request.resource.data.createdByUid == request.auth.uid
         && request.resource.data.name is string
